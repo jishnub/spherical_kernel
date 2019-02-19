@@ -1,0 +1,15 @@
+*.so
+*.o
+*.png
+output_kernel
+error_kernel
+mpitest
+kernel
+.tags
+*.fits
+*.npz
+*.jld2
+.ipynb_checkpoints
+*.pdf
+__pycache__
+unused
