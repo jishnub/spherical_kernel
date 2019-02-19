@@ -1,43 +1,41 @@
 module Sphere_vectorfields
 
-using Reexport,LabelledArrays
+using LabelledArrays
 
 import LinearAlgebra: norm,normalize
 import Base: +,-,*,/,==,≈
 
 export +,-,*,/,==,≈
 
-
-include("./points_on_a_sphere.jl")
-@reexport using .PointsOnASphere
+using PointsOnASphere
 
 export CartesianVector,SphericalVector,HelicityVector,SphericalPolarVector,unitvector
 
 abstract type VectorField end
 
-const cartesian_components = @SLVector (:x,:y,:z)
-const spherical_polar_components = @SLVector (:r,:θ,:ϕ)
-const helicity_components = @SLVector (:p,:z,:m)
-const spherical_components = @SLVector (:p,:z,:m)
+const cartesian_components = @SLVector Float64 (:x,:y,:z)
+const spherical_components = @SLVector ComplexF64 (:p, :z, :m)
+const spherical_polar_components = @SLVector Float64 (:r, :θ, :ϕ)
+const helicity_components = @SLVector ComplexF64 (:p, :z, :m)
 
 # Vector fields evaluated at a point
 struct CartesianVector <: VectorField
-	components :: cartesian_components
+	components :: SLArray{Tuple{3},Float64,1,3,(:x, :y, :z)}
 	pt::Point3D
 end
 
 struct SphericalVector <: VectorField
-	components :: spherical_components
+	components :: SLArray{Tuple{3},ComplexF64,1,3,(:p, :z, :m)}
 	pt::Point3D
 end
 
 struct SphericalPolarVector <: VectorField
-	components :: spherical_polar_components
+	components :: SLArray{Tuple{3},Float64,1,3,(:r, :θ, :ϕ)}
 	pt::Point3D
 end
 
 struct HelicityVector <: VectorField
-	components :: helicity_components
+	components :: SLArray{Tuple{3},ComplexF64,1,3,(:p, :z, :m)}
 	pt::Point3D
 end
 
@@ -56,7 +54,7 @@ const HtoSP = StoC
 
 # Matrix to transform from cartesian to spherical coordinates
 function CartesianToSpherical(v::CartesianVector)
-	components = spherical_components((CtoS*v.components)...)
+	components = cartesian_components(CtoS*v.components...)
 	SphericalVector(components,v.pt)
 end
 
@@ -65,14 +63,14 @@ function CartesianToSphericalPolar(v::CartesianVector)
 		 sin(v.pt.θ)sin(v.pt.ϕ)	cos(v.pt.θ)sin(v.pt.ϕ)	cos(v.pt.ϕ)
 		 cos(v.pt.θ)			-sin(v.pt.θ)					0]'
 
-	components = spherical_polar_components((M*v.components)...)
+	components = spherical_polar_components(M*v.components...)
 	SphericalPolarVector(components,v.pt)
 end
 
 CartesianToHelicity(v::CartesianVector) = SphericalPolarToHelicity(CartesianToSphericalPolar(v))
 
 function SphericalToCartesian(v::SphericalVector)
-	components = real.(cartesian_components((StoC*v.components)...))
+	components = cartesian_components(real.(StoC*v.components)...)
 	CartesianVector(components,v.pt)
 end
 
@@ -81,7 +79,7 @@ function SphericalToSphericalPolar(v::SphericalVector)
 		 cos(v.pt.θ)			-sin(v.pt.θ)					0
 		 sin(v.pt.θ)cis(v.pt.ϕ)/√2	cos(v.pt.θ)cis(v.pt.ϕ)/√2	im/√2*cis(v.pt.ϕ)]'
 
-	components = spherical_polar_components((M*v.components)...)
+	components = spherical_polar_components(real.(M*v.components)...)
 	SphericalPolarVector(components,v.pt)
 end
 
@@ -92,7 +90,7 @@ function SphericalPolarToCartesian(v::SphericalPolarVector)
 		 sin(v.pt.θ)sin(v.pt.ϕ)	cos(v.pt.θ)sin(v.pt.ϕ)	cos(v.pt.ϕ)
 		 cos(v.pt.θ)			-sin(v.pt.θ)					0]
 
-	components = cartesian_components((M*v.components)...)
+	components = M*v.components
 	CartesianVector(components,v.pt)
 end
 
@@ -101,12 +99,12 @@ function SphericalPolarToSpherical(v::SphericalPolarVector)
 		 cos(v.pt.θ)			-sin(v.pt.θ)					0
 		 sin(v.pt.θ)cis(v.pt.ϕ)/√2	cos(v.pt.θ)cis(v.pt.ϕ)/√2	im/√2*cis(v.pt.ϕ)]
 
-	components = spherical_components((M*v.components)...)
+	components = spherical_components(M*v.components...)
 	SphericalVector(components,v.pt)
 end
 
 function SphericalPolarToHelicity(v::SphericalPolarVector)
-	components = helicity_components((SPtoH*v.components)...)
+	components = helicity_components(SPtoH*v.components...)
 	HelicityVector(components,v.pt)
 end
 
@@ -115,7 +113,7 @@ HelicityToCartesian(v::HelicityVector) = SphericalPolarToCartesian(HelicityToSph
 HelicityToSpherical(v::HelicityVector) = SphericalPolarToSpherical(HelicityToSphericalPolar(v))
 
 function HelicityToSphericalPolar(v::HelicityVector)
-	components = real.(spherical_polar_components((HtoSP*v.components)...))
+	components = spherical_polar_components(real.(HtoSP*v.components)...)
 	SphericalPolarVector(components,v.pt)
 end
 
@@ -159,7 +157,9 @@ HelicityVector(p,z,m,n::Point2D) = HelicityVector(helicity_components(p,z,m),Poi
 (≈)(v1::T,v2::T) where T<:VectorField = (v1.components ≈ v2.components) && (v1.pt === v2.pt)
 
 norm(v::T) where T<:real_basis = norm(v.components)
-norm(v::T) where T<:complex_basis = √(-v.p^2 + v.z^2 - v.m^2)
+function norm(v::T) where T<:complex_basis
+	real(√( v.components.z^2 - 2v.components.p*v.components.m ))
+end
 
 normalize(v::T) where T<:real_basis = v/norm(v)
 

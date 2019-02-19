@@ -13,3 +13,4 @@ kernel
 *.pdf
 __pycache__
 unused
+unused/*

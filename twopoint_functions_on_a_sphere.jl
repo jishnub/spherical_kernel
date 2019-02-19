@@ -1,14 +1,9 @@
 module Sphere_2point_functions
 
-using Reexport
-include("./points_on_a_sphere.jl")
-@reexport using PointsOnASphere
-
+using PointsOnASphere
 using ForwardDiff
 
-
 export cosχ
-
 
 cosχ(x::Vector{<:Real}) = cos(x[1])cos(x[3]) + sin(x[1])sin(x[3])cos(x[2]-x[4])
 
