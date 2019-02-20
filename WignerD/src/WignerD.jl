@@ -156,11 +156,7 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,
 	s_valid = abs(ℓ₁-ℓ₂):ℓ₁+ℓ₂
 	s_intersection = intersect(s_range,s_valid)
 
-	println("$svalid $s_range $s_intersection")
-
 	Y_BSH = OffsetArray(zeros(ComplexF64,length(s_intersection),1,1),s_intersection,β:β,γ:γ)
-
-	println(axes(Y_BSH))
 
 	for m in -m_max:m_max
 		C_ℓ₁m_ℓ₂minusm_s0 = CG_tzero(ℓ₁,ℓ₂,m)
@@ -199,11 +195,7 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:R
 	s_valid = abs(ℓ₁-ℓ₂):ℓ₁+ℓ₂
 	s_intersection = intersect(s_valid,s_range)
 
-	
-
 	Y_BSH = OffsetArray(zeros(ComplexF64,length(s_intersection),3,3),s_intersection,-1:1,-1:1)
-
-	
 
 	for m in -m_max:m_max
 		C_ℓ₁m_ℓ₂minusm_s0 = CG_tzero(ℓ₁,ℓ₂,m)
@@ -233,7 +225,7 @@ function Wigner3j(j2,j3,m2,m3)
 
 	w3j = zeros(Float64,len)
 
-	ccall((:wigner3j_wrapper,"./shtools_wrapper.so"),Cvoid,
+	ccall((:wigner3j_wrapper,"shtools_wrapper.so"),Cvoid,
 		(Ref{Float64}, 	#w3j
 			Ref{Int32},	#len
 			# Ref{Int32},	#jmin
@@ -260,7 +252,7 @@ function Wigner3j!(w3j,j2,j3,m2,m3)
 
 	exitstatus = zero(Int32)
 
-	ccall((:wigner3j_wrapper,"./shtools_wrapper.so"),Cvoid,
+	ccall((:wigner3j_wrapper,"shtools_wrapper.so"),Cvoid,
 		(Ref{Float64}, 	#w3j
 			Ref{Int32},	#len
 			# Ref{Int32},	#jmin
@@ -275,7 +267,7 @@ function Wigner3j!(w3j,j2,j3,m2,m3)
 end
 
 function CG_tzero(ℓ₁,ℓ₂,m)
-	smin = max(abs(ℓ₁-ℓ₂), abs(m))
+	smin = 0
 	smax = ℓ₁ + ℓ₂
 	w = Wigner3j(ℓ₁,ℓ₂,m,-m)
 	CG = OffsetArray(w[1:(smax-smin+1)],smin:smax)

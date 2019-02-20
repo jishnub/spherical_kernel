@@ -7,8 +7,6 @@ function wig3j(j2,j3,m2,m3)
 	len = Int32(j2+j3+1)
 
 	exitstatus = zero(Int32)
-	jmin = max(abs(j2-j3), abs(m1))
-	jmax = j2 + j3
 
 	w3j = zeros(Float64,len)
 
@@ -24,5 +22,5 @@ function wig3j(j2,j3,m2,m3)
 			Ref{Int32},	#m3
 			Ref{Int32}),#exitstatus
 		w3j,len, j2, j3, m1, m2,m3, exitstatus)
-	return w3j[]
+	return w3j
 end
