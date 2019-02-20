@@ -1,8 +1,4 @@
-include("../WignerD.jl")
-
-using Main.WignerD
-using Main.WignerD.Sphere_2point_functions
-using Legendre
+using WignerD,PointsOnASphere,TwoPointFunctions,Legendre
 using OffsetArrays
 
 function Yll_Pl_test(;ℓmax=10)
@@ -26,9 +22,9 @@ function Yll_Pl_test(;ℓmax=10)
 	end
 
 	YB_00_10 = OffsetArray{ComplexF64}(undef,0:1,1:ℓmax)
-	for ℓ in 1:ℓmax 
-		YB_00_10[:,ℓ] .= BiPoSH_t0(ℓ,ℓ,0:1,0,0,n1,n2)[:,0,0]
-	end
+	# for ℓ in 1:ℓmax 
+	# 	YB_00_10[:,ℓ] .= BiPoSH_s0(ℓ,ℓ,0:1,0,0,n1,n2)[:,0,0]
+	# end
 
 	return Yℓℓ_00_10≈YB_00_10
 

@@ -1,5 +1,6 @@
 *.so
 *.o
+*.mod
 *.png
 output_kernel
 error_kernel

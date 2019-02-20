@@ -174,6 +174,10 @@ unitvector(v::VectorField) = normalize(v)
 function (+)(v1::T,v2::T) where T<:rotating_basis
 	if v1.pt === v2.pt
 		return T(v1.components + v2.components,v1.pt)
+	elseif (v1.pt.θ == v2.pt.θ) && (v1.pt.ϕ == v2.pt.ϕ)
+		# in this case the points are radially separated, 
+		# and the basis vectors are aligned
+		return T(v1.components + v2.components,v1.pt)
 	else
 		v1C = CartesianVector(v1)
 		v2C = CartesianVector(v2)
@@ -183,7 +187,11 @@ end
 
 function (-)(v1::T,v2::T) where T<:rotating_basis
 	if v1.pt === v2.pt
-		return T(v1.components - v2.components,v1.pt)
+		return T(v1.components - v2.components,v2.pt)
+	elseif (v1.pt.θ == v2.pt.θ) && (v1.pt.ϕ == v2.pt.ϕ)
+		# in this case the points are radially separated, 
+		# and the basis vectors are aligned
+		return T(v1.components - v2.components,v2.pt)
 	else
 		v1C = CartesianVector(v1)
 		v2C = CartesianVector(v2)

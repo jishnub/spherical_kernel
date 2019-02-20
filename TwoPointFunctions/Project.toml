@@ -1,0 +1,8 @@
+name = "TwoPointFunctions"
+uuid = "4eee33de-34ff-11e9-2471-f976ccef942e"
+authors = ["Jishnu Bhattacharya <jishnuonline@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+PointsOnASphere = "efc6e1ae-3467-11e9-103f-8bc3b66ed045"

@@ -619,30 +619,33 @@ end
 module crosscov
 	
 	using Reexport,Distributed
-	using Interpolations,FFTW,JLD2,Printf
-	using OffsetArrays
+	using Interpolations,FFTW,JLD2,Printf,OffsetArrays,PyCall
+	using FastGaussQuadrature,DSP,LsqFit
 	using Main.parallel_utilities
-	@reexport using Main.Greenfn_radial
-
-	import Main.Greenfn_radial: Gfn_path_from_source_radius
+	import Main.Greenfn_radial: Gfn_path_from_source_radius,Gfn
 	using Main.finite_difference
-	using PyCall
 	@pyimport scipy.integrate as integrate
 	@reexport using Legendre
-	using FastGaussQuadrature,DSP,LsqFit
+	@reexport using PointsOnASphere
 	import PyPlot; plt=PyPlot
 
 	include("./twopoint_functions_on_a_sphere.jl");
-
 	@reexport using .Sphere_2point_functions
+	include("./vector_fields_on_a_sphere.jl")
+	@reexport using .Sphere_vectorfields
+
+	export Cω,Cϕω,Cω_onefreq,h,Powspec,Ct
+	export δCω_uniform_rotation_firstborn_integrated_over_angle
+	export δCω_uniform_rotation_rotatedwaves_linearapprox
+	export δCω_uniform_rotation_rotatedwaves,δCt_uniform_rotation_rotatedwaves
 
 	Gfn_path_from_source_radius(x::Point3D) = Gfn_path_from_source_radius(x.r)
 
 	function line_of_sight(p::Point3D,detector::Point3D=Point3D(149.6e11,π/2,0))
-		Ph = CartesianCoordinates(p)
-		Dh = CartesianCoordinates(detector)
-		l = Dh-Ph
-		return lc ./ norm(lc)
+		point_vector = CartesianVector(p)
+		Detector_vector = CartesianVector(detector)
+		l = HelicityVector(Detector_vector-point_vector)
+		unitvector(l)
 	end
 
 	line_of_sight(n::Point2D,detector::Point3D=Point3D(149.6e11,π/2,0)) = line_of_sight(Point3D(Rsun,n),detector)
@@ -2237,9 +2240,7 @@ module crosscov
 	h(n1::Point2D,n2::Point2D,r_obs::Real=Rsun-75e5;plots=false,bounce_no=1) = h(Point3D(r_obs,n1),Point3D(r_obs,n2),plots=plots,bounce_no=bounce_no)
 	h(Δϕ::Real,r_obs::Real=Rsun-75e5;plots=false,bounce_no=1) = h(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),plots=plots,bounce_no=bounce_no)
 
-	export Cω,Cϕω,Cω_onefreq,h,Powspec,Ct
-	export δCω_uniform_rotation_firstborn_integrated_over_angle
-	export δCω_uniform_rotation_rotatedwaves_linearapprox,δCω_uniform_rotation_rotatedwaves,δCt_uniform_rotation_rotatedwaves
+	
 end
 
 module kernel

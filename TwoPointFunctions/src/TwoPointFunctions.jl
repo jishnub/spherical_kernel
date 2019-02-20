@@ -1,4 +1,4 @@
-module Sphere_2point_functions
+module TwoPointFunctions
 
 using PointsOnASphere
 using ForwardDiff
@@ -82,20 +82,19 @@ for pt in 1:2
 		@eval $(Symbol(fn))(x) = $(Symbol("∂ϕ$(subscripts[pt])cosχ"))(x) * real(im^($order-1))
 		@eval $(Symbol(fn))(x...) = $(Symbol("∂ϕ$(subscripts[pt])cosχ"))(x...) * real(im^($order-1))
 		@eval export $(Symbol(fn))
-		append!(list_of_functions,fn)
+		push!(list_of_functions,fn)
 	end
 	for order in 4:2:8
 		fn = "∂$(powers[order])ϕ$(subscripts[pt])cosχ"
 		@eval $(Symbol(fn))(x) = $(Symbol("∂²ϕ$(subscripts[pt])cosχ"))(x) * real(im^($order-2))
 		@eval $(Symbol(fn))(x...) = $(Symbol("∂²ϕ$(subscripts[pt])cosχ"))(x...) * real(im^($order-2))
 		@eval export $(Symbol(fn))
-		append!(list_of_functions,fn)
+		push!(list_of_functions,fn)
 	end
 end
 
 # Add methods
-for pt in 1:2, fn in list_of_functions
-	
+for fn in list_of_functions
 	@eval $(Symbol(fn))(θ₁::Real,ϕ₁::Real,θ₂::Real,ϕ₂::Real) = $(Symbol(fn))((θ₁,ϕ₁),(θ₂,ϕ₂))
 	@eval $(Symbol(fn))((θ₁,ϕ₁)::NTuple{2,Real},θ₂::Real,ϕ₂::Real) = $(Symbol(fn))((θ₁,ϕ₁),(θ₂,ϕ₂))
 	@eval $(Symbol(fn))(θ₁::Real,ϕ₁::Real,(θ₂,ϕ₂)::NTuple{2,Real}) = $(Symbol(fn))((θ₁,ϕ₁),(θ₂,ϕ₂))
