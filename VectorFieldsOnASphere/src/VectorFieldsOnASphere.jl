@@ -1,4 +1,4 @@
-module Sphere_vectorfields
+module VectorFieldsOnASphere
 
 using LabelledArrays
 
@@ -20,22 +20,22 @@ const helicity_components = @SLVector ComplexF64 (:p, :z, :m)
 
 # Vector fields evaluated at a point
 struct CartesianVector <: VectorField
-	components :: SLArray{Tuple{3},Float64,1,3,(:x, :y, :z)}
+	components :: AbstractArray
 	pt::Point3D
 end
 
 struct SphericalVector <: VectorField
-	components :: SLArray{Tuple{3},ComplexF64,1,3,(:p, :z, :m)}
+	components :: AbstractArray
 	pt::Point3D
 end
 
 struct SphericalPolarVector <: VectorField
-	components :: SLArray{Tuple{3},Float64,1,3,(:r, :θ, :ϕ)}
+	components :: AbstractArray
 	pt::Point3D
 end
 
 struct HelicityVector <: VectorField
-	components :: SLArray{Tuple{3},ComplexF64,1,3,(:p, :z, :m)}
+	components :: AbstractArray
 	pt::Point3D
 end
 
@@ -147,11 +147,12 @@ SphericalPolarVector(v::CartesianVector) = CartesianToSphericalPolar(v)
 SphericalPolarVector(v::SphericalVector) = SphericalToSphericalPolar(v)
 SphericalPolarVector(v::HelicityVector) = HelicityToSphericalPolar(v)
 
+twoD_types = Union{Point2D,Tuple{<:Real,<:Real}}
 
-CartesianVector(x,y,z,n::Point2D) = CartesianVector(cartesian_components(x,y,z),Point3D(1,n))
-SphericalVector(p,z,m,n::Point2D) = SphericalVector(spherical_components(p,z,m),Point3D(1,n))
-SphericalPolarVector(r,θ,ϕ,n::Point2D) = SphericalPolarVector(spherical_polar_components(r,θ,ϕ),Point3D(1,n))
-HelicityVector(p,z,m,n::Point2D) = HelicityVector(helicity_components(p,z,m),Point3D(1,n))
+CartesianVector(x,y,z,n::twoD_types) = CartesianVector(cartesian_components(x,y,z),Point3D(1,n))
+SphericalVector(p,z,m,n::twoD_types) = SphericalVector(spherical_components(p,z,m),Point3D(1,n))
+SphericalPolarVector(r,θ,ϕ,n::twoD_types) = SphericalPolarVector(spherical_polar_components(r,θ,ϕ),Point3D(1,n))
+HelicityVector(p,z,m,n::twoD_types) = HelicityVector(helicity_components(p,z,m),Point3D(1,n))
 
 (==)(v1::T,v2::T) where T<:VectorField = v1 === v2
 (≈)(v1::T,v2::T) where T<:VectorField = (v1.components ≈ v2.components) && (v1.pt === v2.pt)
@@ -208,20 +209,13 @@ end
 function Base.show(io::IO, v::VectorField)
     compact = get(io, :compact, false)
 
-    components = v.components
-
-    println(io,"Vector with components $(v.components) defined at $(v.pt)")
-
-    # if compact
-    #     print(io,components)
-    # else
-    #     print(io, x, " ± $y")
-    # end
+    print(io,round.(v.components,sigdigits=3)," at $(v.pt)")
     
 end
 
 function Base.show(io::IO, ::MIME"text/plain", v::VectorField)
-    show(io, v)
+    println(io,"Vector with components $(v.components)")
+    print(io,"Defined at $(v.pt)")
 end
 
-end
+end # module

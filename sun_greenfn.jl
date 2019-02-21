@@ -618,8 +618,9 @@ end
 
 module crosscov
 	
-	using Reexport,Distributed
-	using Interpolations,FFTW,JLD2,Printf,OffsetArrays,PyCall
+	using Reexport
+	@reexport using Distributed,JLD2,Printf,OffsetArrays,PyCall
+	using Interpolations,FFTW
 	using FastGaussQuadrature,DSP,LsqFit
 	using Main.parallel_utilities
 	import Main.Greenfn_radial: Gfn_path_from_source_radius,Gfn
@@ -629,10 +630,9 @@ module crosscov
 	@reexport using PointsOnASphere
 	import PyPlot; plt=PyPlot
 
-	include("./twopoint_functions_on_a_sphere.jl");
-	@reexport using .Sphere_2point_functions
-	include("./vector_fields_on_a_sphere.jl")
-	@reexport using .Sphere_vectorfields
+	# include("./twopoint_functions_on_a_sphere.jl");
+	@reexport using TwoPointFunctions
+	@reexport using VectorFieldsOnASphere
 
 	export Cω,Cϕω,Cω_onefreq,h,Powspec,Ct
 	export δCω_uniform_rotation_firstborn_integrated_over_angle
@@ -2245,9 +2245,7 @@ end
 
 module kernel
 
-	using Reexport
 	using Main.crosscov
-	using PyCall
 	@pyimport scipy.integrate as integrate
 
 	function kernel_uniform_rotation_uplus(n1::Point2D,n2::Point2D,r_obs::Real=Rsun-75e5;ℓ_range=nothing)

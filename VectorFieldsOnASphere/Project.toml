@@ -1,0 +1,9 @@
+name = "VectorFieldsOnASphere"
+uuid = "a42319a6-3553-11e9-2657-c59946f7e5c3"
+authors = ["jishnub <jishnuonline@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+LabelledArrays = "2ee39098-c373-598a-b85f-a56591580800"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+PointsOnASphere = "efc6e1ae-3467-11e9-103f-8bc3b66ed045"

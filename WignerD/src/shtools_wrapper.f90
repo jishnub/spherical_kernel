@@ -17,24 +17,24 @@ end subroutine wigner3j_wrapper
 
 end module shtools_wrapper
 
-program main
-    use, intrinsic :: iso_c_binding
-    use shtools_wrapper
-    implicit none
-    integer(kind=C_INT32_T) len,jmin, jmax, j2, j3, m1, m2, m3, exitstatus
-    real(kind=C_DOUBLE), allocatable :: w3j(:)
+! program main
+!     use, intrinsic :: iso_c_binding
+!     use shtools_wrapper
+!     implicit none
+!     integer(kind=C_INT32_T) len,jmin, jmax, j2, j3, m1, m2, m3, exitstatus
+!     real(kind=C_DOUBLE), allocatable :: w3j(:)
 
-    j2=1; j3=1; m1=0; m2=1; m3=-1
+!     j2=1; j3=1; m1=0; m2=1; m3=-1
 
-    exitstatus = 0
-    len = j2+j3+1
-    allocate(w3j(len))
-    w3j = 0.
+!     exitstatus = 0
+!     len = j2+j3+1
+!     allocate(w3j(len))
+!     w3j = 0.
 
-    call wigner3j_wrapper(w3j,len,j2, j3, m1, m2, m3, exitstatus)
+!     call wigner3j_wrapper(w3j,len,jmin,jmax,j2, j3, m1, m2, m3, exitstatus)
 
-    print*,w3j
+!     print*,w3j,jmin,jmax
 
-    deallocate(w3j)
+!     deallocate(w3j)
 
-end program main
+! end program main
