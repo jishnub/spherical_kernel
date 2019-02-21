@@ -1,7 +1,5 @@
 using WignerD,PointsOnASphere,TwoPointFunctions,Legendre
 using OffsetArrays
-using Libdl
-push!(Libdl.DL_LOAD_PATH, dirname(pathof(WignerD)))
 using Test
 
 @testset "d1_mn(θ)" begin

@@ -1,5 +1,5 @@
 module WignerD
-using OffsetArrays, WignerSymbols, LinearAlgebra
+using OffsetArrays, WignerSymbols, LinearAlgebra,Libdl
 
 # using PyCall
 # @pyimport pyshtools.utils as SHTools
@@ -147,7 +147,8 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s::Integer,β::Integer,γ::Integer,(θ₁,ϕ₁
 	return Y_BSH
 end
 
-function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real})
+function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,
+	(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real};wig3j_fn_ptr=nothing)
 	# only t=0
 	Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁),n_range=β:β)
 	Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂),n_range=γ:γ)
@@ -158,14 +159,25 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,
 
 	Y_BSH = OffsetArray(zeros(ComplexF64,length(s_intersection),1,1),s_intersection,β:β,γ:γ)
 
+	lib = nothing
+
+	if isnothing(wig3j_fn_ptr)
+		lib=Libdl.dlopen(joinpath(dirname(pathof(WignerD)),"shtools_wrapper.so"))
+		wig3j_fn_ptr=Libdl.dlsym(lib,:wigner3j_wrapper)
+	end
+
 	for m in -m_max:m_max
-		C_ℓ₁m_ℓ₂minusm_s0 = CG_tzero(ℓ₁,ℓ₂,m)
+		C_ℓ₁m_ℓ₂minusm_s0 = CG_tzero(ℓ₁,ℓ₂,m;wig3j_fn_ptr=wig3j_fn_ptr)
 
 		s_intersection = intersect(axes(Y_BSH,1),axes(C_ℓ₁m_ℓ₂minusm_s0,1))
 		
 		for s in s_intersection
 			Y_BSH[s,β,γ] += C_ℓ₁m_ℓ₂minusm_s0[s]*Y_ℓ₁[m,β]*Y_ℓ₂[-m,γ]
 		end
+	end
+
+	if !isnothing(lib)
+		Libdl.dlclose(lib)
 	end
 
 	return Y_BSH
@@ -187,7 +199,7 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s::Integer,(θ₁,ϕ₁)::Tuple{<:Real,<:Real},
 	return Y_BSH
 end
 
-function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real})
+function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real};wig3j_fn_ptr=nothing)
 	Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁))
 	Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂))
 	m_max = min(ℓ₁,ℓ₂)
@@ -197,8 +209,15 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:R
 
 	Y_BSH = OffsetArray(zeros(ComplexF64,length(s_intersection),3,3),s_intersection,-1:1,-1:1)
 
+	lib = nothing
+
+	if isnothing(wig3j_fn_ptr)
+		lib=Libdl.dlopen(joinpath(dirname(pathof(WignerD)),"shtools_wrapper.so"))
+		wig3j_fn_ptr=Libdl.dlsym(lib,:wigner3j_wrapper)
+	end
+
 	for m in -m_max:m_max
-		C_ℓ₁m_ℓ₂minusm_s0 = CG_tzero(ℓ₁,ℓ₂,m)
+		C_ℓ₁m_ℓ₂minusm_s0 = CG_tzero(ℓ₁,ℓ₂,m;wig3j_fn_ptr=wig3j_fn_ptr)
 
 		s_intersection = intersect(axes(Y_BSH,1),axes(C_ℓ₁m_ℓ₂minusm_s0,1))
 
@@ -207,13 +226,17 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:R
 		end
 	end
 
+	if !isnothing(lib)
+		Libdl.dlclose(lib)
+	end
+
 	return Y_BSH
 end
 
 BiPoSH_s0(ℓ₁,ℓ₂,s,β::Integer,γ::Integer,n1::Point2D,n2::Point2D) = BiPoSH_s0(ℓ₁,ℓ₂,s,β,γ,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
 BiPoSH_s0(ℓ₁,ℓ₂,s,n1::Point2D,n2::Point2D) = BiPoSH_s0(ℓ₁,ℓ₂,s,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
 
-function Wigner3j(j2,j3,m2,m3)
+function Wigner3j(j2,j3,m2,m3;wig3j_fn_ptr=nothing)
 	
 	m2,m3 = Int32(m2),Int32(m3)
 	m1 = Int32(m2 + m3)
@@ -225,7 +248,14 @@ function Wigner3j(j2,j3,m2,m3)
 
 	w3j = zeros(Float64,len)
 
-	ccall((:wigner3j_wrapper,"shtools_wrapper.so"),Cvoid,
+	lib = nothing
+
+	if isnothing(wig3j_fn_ptr)
+		lib=Libdl.dlopen(joinpath(dirname(pathof(WignerD)),"shtools_wrapper.so"))
+		wig3j_fn_ptr=Libdl.dlsym(lib,:wigner3j_wrapper)
+	end
+
+	ccall(wig3j_fn_ptr,Cvoid,
 		(Ref{Float64}, 	#w3j
 			Ref{Int32},	#len
 			# Ref{Int32},	#jmin
@@ -237,10 +267,15 @@ function Wigner3j(j2,j3,m2,m3)
 			Ref{Int32},	#m3
 			Ref{Int32}),#exitstatus
 		w3j,len, j2, j3, m1, m2,m3, exitstatus)
+
+	if !isnothing(lib)
+		Libdl.dlclose(lib)
+	end
+
 	return w3j
 end
 
-function Wigner3j!(w3j,j2,j3,m2,m3)
+function Wigner3j!(w3j,j2,j3,m2,m3;wig3j_fn_ptr=nothing)
 	
 	m2,m3 = Int32(m2),Int32(m3)
 	m1 = Int32(m2 + m3)
@@ -252,7 +287,14 @@ function Wigner3j!(w3j,j2,j3,m2,m3)
 
 	exitstatus = zero(Int32)
 
-	ccall((:wigner3j_wrapper,"shtools_wrapper.so"),Cvoid,
+	lib = nothing
+
+	if isnothing(wig3j_fn_ptr)
+		lib=Libdl.dlopen(joinpath(dirname(pathof(WignerD)),"shtools_wrapper.so"))
+		wig3j_fn_ptr=Libdl.dlsym(lib,:wigner3j_wrapper)
+	end
+
+	ccall(wig3j_fn_ptr,Cvoid,
 		(Ref{Float64}, 	#w3j
 			Ref{Int32},	#len
 			# Ref{Int32},	#jmin
@@ -264,12 +306,16 @@ function Wigner3j!(w3j,j2,j3,m2,m3)
 			Ref{Int32},	#m3
 			Ref{Int32}),#exitstatus
 		w3j,len, j2, j3, m1, m2,m3, exitstatus)
+
+	if !isnothing(lib)
+		Libdl.dlclose(lib)
+	end
 end
 
-function CG_tzero(ℓ₁,ℓ₂,m)
+function CG_tzero(ℓ₁,ℓ₂,m;wig3j_fn_ptr=nothing)
 	smin = abs(ℓ₁-ℓ₂)
 	smax = ℓ₁ + ℓ₂
-	w = Wigner3j(ℓ₁,ℓ₂,m,-m)
+	w = Wigner3j(ℓ₁,ℓ₂,m,-m;wig3j_fn_ptr=wig3j_fn_ptr)
 	CG = OffsetArray(w[1:(smax-smin+1)],smin:smax)
 	for s in axes(CG,1)
 		CG[s] *= √(2s+1)*(-1)^(ℓ₁-ℓ₂)

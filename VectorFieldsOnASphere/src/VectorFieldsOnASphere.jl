@@ -13,6 +13,8 @@ export CartesianVector,SphericalVector,HelicityVector,SphericalPolarVector,unitv
 
 abstract type VectorField end
 
+const vector_types = (:CartesianVector,:SphericalVector,:SphericalPolarVector,:HelicityVector)
+
 const cartesian_components = @SLVector Float64 (:x,:y,:z)
 const spherical_components = @SLVector ComplexF64 (:p, :z, :m)
 const spherical_polar_components = @SLVector Float64 (:r, :θ, :ϕ)
@@ -148,11 +150,22 @@ SphericalPolarVector(v::SphericalVector) = SphericalToSphericalPolar(v)
 SphericalPolarVector(v::HelicityVector) = HelicityToSphericalPolar(v)
 
 twoD_types = Union{Point2D,Tuple{<:Real,<:Real}}
+threeD_types = Union{Point3D,Tuple{<:Real,<:Real,<:Real}}
 
-CartesianVector(x,y,z,n::twoD_types) = CartesianVector(cartesian_components(x,y,z),Point3D(1,n))
-SphericalVector(p,z,m,n::twoD_types) = SphericalVector(spherical_components(p,z,m),Point3D(1,n))
-SphericalPolarVector(r,θ,ϕ,n::twoD_types) = SphericalPolarVector(spherical_polar_components(r,θ,ϕ),Point3D(1,n))
-HelicityVector(p,z,m,n::twoD_types) = HelicityVector(helicity_components(p,z,m),Point3D(1,n))
+CartesianVector(x,y,z,pt::threeD_types) = CartesianVector(cartesian_components(x,y,z),Point3D(pt))
+SphericalVector(p,z,m,pt::threeD_types) = SphericalVector(spherical_components(p,z,m),Point3D(pt))
+SphericalPolarVector(r,θ,ϕ,pt::threeD_types) = SphericalPolarVector(spherical_polar_components(r,θ,ϕ),Point3D(pt))
+HelicityVector(p,z,m,pt::threeD_types) = HelicityVector(helicity_components(p,z,m),Point3D(pt))
+
+CartesianVector(x,y,z,n::twoD_types) = CartesianVector(x,y,z,Point3D(1,n))
+SphericalVector(p,z,m,n::twoD_types) = SphericalVector(p,z,m,Point3D(1,n))
+SphericalPolarVector(r,θ,ϕ,n::twoD_types) = SphericalPolarVector(r,θ,ϕ,Point3D(1,n))
+HelicityVector(p,z,m,n::twoD_types) = HelicityVector(p,z,m,Point3D(1,n))
+
+for T in vector_types
+	# Iterables
+	@eval $(T)(v,n::SphericalPoint) = $(T)(v[1],v[2],v[3],n)
+end
 
 (==)(v1::T,v2::T) where T<:VectorField = v1 === v2
 (≈)(v1::T,v2::T) where T<:VectorField = (v1.components ≈ v2.components) && (v1.pt === v2.pt)
@@ -217,5 +230,6 @@ function Base.show(io::IO, ::MIME"text/plain", v::VectorField)
     println(io,"Vector with components $(v.components)")
     print(io,"Defined at $(v.pt)")
 end
+
 
 end # module

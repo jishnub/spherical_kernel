@@ -1,3 +1,5 @@
+using Libdl,WignerD
+
 function wig3j(j2,j3,m2,m3)
 	
 	m2,m3 = Int32(m2),Int32(m3)
@@ -10,7 +12,10 @@ function wig3j(j2,j3,m2,m3)
 
 	w3j = zeros(Float64,len)
 
-	ccall((:wigner3j_wrapper,"../src/shtools_wrapper.so"),Cvoid,
+	lib=Libdl.dlopen(joinpath(dirname(pathof(WignerD)),"shtools_wrapper.so"))
+	sym=Libdl.dlsym(lib,:wigner3j_wrapper)
+
+	ccall(sym,Cvoid,
 		(Ref{Float64}, 	#w3j
 			Ref{Int32},	#len
 			# Ref{Int32},	#jmin
@@ -22,5 +27,8 @@ function wig3j(j2,j3,m2,m3)
 			Ref{Int32},	#m3
 			Ref{Int32}),#exitstatus
 		w3j,len, j2, j3, m1, m2,m3, exitstatus)
+
+	Libdl.dlclose(lib)
+	
 	return w3j
 end

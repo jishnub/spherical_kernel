@@ -23,7 +23,7 @@ Point2D(x::Point3D) = Point2D(x.θ,x.ϕ)
 Point2D(x::Point2D) = x
 
 Point2D(n) = Point2D(n...)
-Point3D(x) = Point2D(x...)
+Point3D(x) = Point3D(x...)
 
 SphericalPoint = Union{Point2D,Point3D}
 
@@ -33,6 +33,5 @@ Base.show(io::IO, pt::Point2D) = print(io,"(θ=$(round(pt.θ,sigdigits=3)), ϕ=$
 
 Base.show(io::IO, ::MIME"text/plain", pt::Point3D) = print(io,"(r=$(pt.r), θ=$(pt.θ), ϕ = $(pt.ϕ))")
 Base.show(io::IO, ::MIME"text/plain", pt::Point2D) = print(io,"(θ=$(pt.θ), ϕ = $(pt.ϕ))")
-
 
 end # module
