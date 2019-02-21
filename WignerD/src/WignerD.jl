@@ -267,7 +267,7 @@ function Wigner3j!(w3j,j2,j3,m2,m3)
 end
 
 function CG_tzero(ℓ₁,ℓ₂,m)
-	smin = 0
+	smin = abs(ℓ₁-ℓ₂)
 	smax = ℓ₁ + ℓ₂
 	w = Wigner3j(ℓ₁,ℓ₂,m,-m)
 	CG = OffsetArray(w[1:(smax-smin+1)],smin:smax)
