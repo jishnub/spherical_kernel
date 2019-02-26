@@ -83,20 +83,20 @@ module parallel_utilities
 		return proc_id
 	end
 
-	function get_processor_range_from_split_array(arr₁,arr₂,tasks_on_proc,num_procs)
+	function get_processor_range_from_split_array(arr₁,arr₂,modes_on_proc,num_procs)
 		
-		if isempty(tasks_on_proc)
+		if isempty(modes_on_proc)
 			return 0:-1
 		end
 
-		tasks_arr = collect(tasks_on_proc)
+		tasks_arr = collect(modes_on_proc)
 		proc_id_start = get_processor_id_from_split_array(arr₁,arr₂,first(tasks_arr),num_procs)
 		proc_id_end = get_processor_id_from_split_array(arr₁,arr₂,last(tasks_arr),num_procs)
 		return proc_id_start:proc_id_end
 	end
 
-	function get_index_in_split_array(tasks_on_proc,(arr₁_value,arr₂_value))
-		for (ind,(t1,t2)) in enumerate(tasks_on_proc)
+	function get_index_in_split_array(modes_on_proc,(arr₁_value,arr₂_value))
+		for (ind,(t1,t2)) in enumerate(modes_on_proc)
 			if (t1==arr₁_value) && (t2 == arr₂_value)
 				return ind
 			end
@@ -394,8 +394,7 @@ end
 module load_parameters
 
 	using Reexport
-	@reexport using Main.finite_difference,DelimitedFiles,Main.parallel_utilities
-	using Polynomials
+	@reexport using Main.finite_difference,DelimitedFiles,Main.parallel_utilities,Polynomials
 
 	function load_solar_model()
 		
@@ -517,7 +516,7 @@ module Greenfn_radial
 	# 	G :: OffsetArray{ComplexF64,3,Array{ComplexF64,3}}
 	# end
 
-	function compute_radial_component_of_Gfn_onemode(ω,ℓ;r_src=Rsun-75e5)
+	function compute_radial_component_of_Gfn_onemode(ω,ℓ;r_src=Rsun-75e5,tangential=false)
 
 		# Solar model
 
@@ -533,13 +532,18 @@ module Greenfn_radial
 		βrℓω = H[nr:end]
 		append!(βrℓω,0)
 
-		H = M\Sh;
+		if tangential
 
-		αhℓω = H[1:nr-1]
-		prepend!(αhℓω,0)
+			H = M\Sh;
 
-		βhℓω = H[nr:end]
-		append!(βhℓω,0)
+			αhℓω = H[1:nr-1]
+			prepend!(αhℓω,0)
+
+			βhℓω = H[nr:end]
+			append!(βhℓω,0)
+		else
+			αhℓω = βhℓω = zeros(nr)
+		end
 
 		return αrℓω,βrℓω,αhℓω,βhℓω
 	end
@@ -552,15 +556,15 @@ module Greenfn_radial
 										(@sprintf "%dkm" (Rsun-r_src)/1e5) : (@sprintf "%.2fRsun" r_src/Rsun) ))"
 	end
 
-	function compute_Greenfn_radial_components_allmodes_parallel(r_src=Rsun-75e5;ℓ_arr=1:100,
+	function compute_Greenfn_components_allmodes_parallel(r_src=Rsun-75e5;ℓ_arr=1:100,
 		ν_low=2.0e-3,ν_high=4.5e-3,num_ν=1250)
 
 		Nν = 3*num_ν; Nt = 2*(Nν-1)
 		ν_full = LinRange(0,7.5e-3,Nν); ν_nyquist = ν_full[end];
 		ν_arr = ν_full[ν_low .≤ ν_full .≤ ν_high];
 		dν = ν_full[2] - ν_full[1]; T=1/dν; dt = T/Nt;
-		ν_start_zeros = count(ν_full .<= ν_low)
-		ν_end_zeros = count(ν_high .<= ν_full)
+		ν_start_zeros = count(ν_full .< ν_low)
+		ν_end_zeros = count(ν_high .< ν_full)
 		println("$(length(ν_arr)) frequencies over $(@sprintf "%.1e" ν_arr[1]) to $(@sprintf "%.1e" ν_arr[end])")
 
 		ω_arr = 2π .* ν_arr;
@@ -574,10 +578,10 @@ module Greenfn_radial
 		end
 		println("Saving output to $Gfn_save_directory")
 
-		num_procs = nworkers()
-		println("Number of workers: $num_procs")
+		w = workers_active(ℓ_arr,ν_arr)
+		num_procs = length(w)
 
-		@save joinpath(Gfn_save_directory,"parameters.jld2") ν_arr ℓ_arr num_procs ν_full dν ν_start_zeros ν_end_zeros Nν Nt dt ν_nyquist T
+		println("Number of workers: $num_procs")
 
 		function compute_G_somemodes_serial_oneproc(rank)
 
@@ -616,24 +620,105 @@ module Greenfn_radial
 
 			write(file,G.parent)
 
+			# modes_ℓ,modes_ω_ind = collect.(zip(ℓ_ω_proc...))
+
+			# write(file,Dict("mode_l"=>modes_ℓ,"mode_omega_ind"=>modes_ω_ind))
+
 			close(file)
-			# return Gfn_arr # useful for debugging
+			return rank
 		end
 
-		w = workers_active(ℓ_arr,ν_arr)
 		if isempty(w)
 			return
 		else
-			@time pmap(compute_G_somemodes_serial_oneproc,1:length(w))
+			f = [@spawn compute_G_somemodes_serial_oneproc(rank) for rank in 1:length(w)]
+			println("$(length(fetch.(f))) jobs finished")
 		end
 
+		@save joinpath(Gfn_save_directory,"parameters.jld2") ν_arr ℓ_arr num_procs ν_full dν ν_start_zeros ν_end_zeros Nν Nt dt ν_nyquist T
+	end
+
+	function compute_Greenfn_radial_components_allmodes_parallel(r_src=Rsun-75e5;ℓ_arr=1:100,
+		ν_low=2.0e-3,ν_high=4.5e-3,num_ν=1250)
+
+		Nν = 3*num_ν; Nt = 2*(Nν-1)
+		ν_full = LinRange(0,7.5e-3,Nν); ν_nyquist = ν_full[end];
+		ν_arr = ν_full[ν_low .≤ ν_full .≤ ν_high];
+		dν = ν_full[2] - ν_full[1]; T=1/dν; dt = T/Nt;
+		ν_start_zeros = count(ν_full .< ν_low)
+		ν_end_zeros = count(ν_high .< ν_full)
+		println("$(length(ν_arr)) frequencies over $(@sprintf "%.1e" ν_arr[1]) to $(@sprintf "%.1e" ν_arr[end])")
+
+		ω_arr = 2π .* ν_arr;
+
+		println("ℓ from $(ℓ_arr[1]) to $(ℓ_arr[end])")
+
+		Gfn_save_directory = Gfn_path_from_source_radius(r_src)
+
+		if !isdir(Gfn_save_directory)
+			mkdir(Gfn_save_directory)
+		end
+		println("Saving output to $Gfn_save_directory")
+
+		w = workers_active(ℓ_arr,ν_arr)
+		num_procs = length(w)
+
+		println("Number of workers: $num_procs")
+
+		function compute_G_somemodes_serial_oneproc(rank)
+
+			# Each processor will save all ℓ's  for a range of frequencies if number of frequencies can be split evenly across processors.
+			ℓ_ω_proc = split_product_across_processors(ℓ_arr,axes(ν_arr,1),nworkers(),rank);
+			
+			# Gfn_arr = Vector{Gfn}(undef,length(ℓ_ω_proc));
+			save_path = joinpath(Gfn_save_directory,@sprintf "Gfn_proc_%03d.fits" rank)
+
+			# file = jldopen(save_path,"w")
+			file = FITS(save_path,"w")
+
+			# save real and imaginary parts separately 
+			G = OffsetArray(zeros(nr,2,2,1,length(ℓ_ω_proc)),0,0,-1,-1,0)
+
+			Dr = dbydr(dr) # derivative operator
+			T2 = (N2./g .+ Dr*log.(r.^2 .*ρ) )
+
+			for (ind,(ℓ,ω_ind)) in enumerate(ℓ_ω_proc)
+				
+				ω = ω_arr[ω_ind]
+				αr,βr, = compute_radial_component_of_Gfn_onemode(ω,ℓ,tangential=false);
+
+				@. G[:,1,0,0,ind] = real(αr)
+				@. G[:,2,0,0,ind] = imag(αr)
+				@. G[:,1,1,0,ind] = real(Ω(ℓ,0) * βr/(ρ*r*ω^2))
+				@. G[:,2,1,0,ind] = imag(Ω(ℓ,0) * βr/(ρ*r*ω^2))
+				
+			end
+
+			write(file,G.parent)
+
+			# modes_ℓ,modes_ω_ind = collect.(zip(ℓ_ω_proc...))
+
+			# write(file,Dict("mode_l"=>modes_ℓ,"mode_omega_ind"=>modes_ω_ind))
+
+			close(file)
+			return rank
+		end
+
+		if isempty(w)
+			return
+		else
+			f = [@spawn compute_G_somemodes_serial_oneproc(rank) for rank in 1:length(w)]
+			println("$(length(fetch.(f))) jobs finished")
+		end
+
+		@save joinpath(Gfn_save_directory,"parameters.jld2") ν_arr ℓ_arr num_procs ν_full dν ν_start_zeros ν_end_zeros Nν Nt dt ν_nyquist T
 	end
 
 	export compute_Greenfn_radial_components_allmodes_parallel,Gfn,Gfn_path_from_source_radius,Ω
 end
 
 #################################################################
-# Full 3D Green function
+# Cross covariances and changes in cross covariances
 #################################################################
 
 module crosscov
@@ -1247,9 +1332,9 @@ module crosscov
 
 	# 	∂ϕ₁Pl_cosχ = dPl(cosχ(x1,x_src),ℓmax=ℓmax) .* ∂ϕ₁cosχ(x1,x_src)
 
-	# 	tasks_on_proc = split_product_across_processors(ℓ_arr,ν_ind_range)
+	# 	modes_on_proc = split_product_across_processors(ℓ_arr,ν_ind_range)
 
-	# 	proc_id_range = get_processor_range_from_split_array(ℓ_arr,axes(ν_arr,1),tasks_on_proc,num_procs);
+	# 	proc_id_range = get_processor_range_from_split_array(ℓ_arr,axes(ν_arr,1),modes_on_proc,num_procs);
 		
 
 	# 	function sum_modes(proc_id,ν_ind_range,∂ϕ₁Pl_cosχ)
@@ -1337,10 +1422,72 @@ module crosscov
 
 	#######################################################################################################
 
-	function Cω(x1::Point3D,x2::Point3D;ℓ_range=nothing,ν_ind_range=nothing)
+	# Parallel check
+
+	function parallel_check(;r_obs=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing)
+		Gfn_path = Gfn_path_from_source_radius(r_obs)
+		@load joinpath(Gfn_path,"parameters.jld2") ν_arr ℓ_arr num_procs
+
+		Nν_Gfn = length(ν_arr)
+
+		if isnothing(ℓ_range)
+			ℓ_range = ℓ_arr
+		else
+			ℓ_range = intersect(ℓ_arr,ℓ_range)
+		end
+
+		if isnothing(ν_ind_range)
+			ν_ind_range = 1:Nν_Gfn
+		else
+			ν_ind_range = intersect(1:Nν_Gfn,ν_ind_range)
+		end
+
+		modes_checked = OffsetArray{Bool}(undef,ℓ_range,ν_ind_range)
+		fill!(modes_checked,false)
+
+		function singleprocessor(rank)
+
+			modes_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,nworkers(),rank)
+
+			proc_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,modes_on_proc,num_procs)
+
+			modes_checked_proc = OffsetArray{Bool}(undef,ℓ_range,ν_ind_range)
+			fill!(modes_checked_proc,false)
+
+			for proc_id in proc_range
+
+				# Get a list of (ℓ,ω) in this file
+				modes_in_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
+
+		    	for (ℓ,ω_ind) in intersect(modes_in_file,modes_on_proc)
+
+		    		# mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
+		    		modes_checked_proc[ℓ,ω_ind] = true
+		    		
+				end
+			end
+
+			return modes_checked_proc
+		end
+
+		futures = [@spawnat p singleprocessor(rank) for (rank,p) in enumerate(workers_active(ℓ_range,ν_ind_range))]
+
+		for f in futures
+			modes_checked_proc = fetch(f)
+			modes_checked .|= modes_checked_proc
+		end
+
+		return all(modes_checked)
+
+	end
+
+
+	#######################################################################################################
+
+	function Cω(x1::Point3D,x2::Point3D;r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing)
 		
-		Gfn_path = Gfn_path_from_source_radius(x1)
-		@load joinpath(Gfn_path,"parameters.jld2") ν_arr ℓ_arr num_procs Nν ν_start_zeros dt
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs Nν ν_start_zeros
 
 		Cω_arr = zeros(ComplexF64,Nν)
 		Nν_Gfn = length(ν_arr)
@@ -1348,27 +1495,23 @@ module crosscov
 		if isnothing(ℓ_range)
 			ℓ_range = ℓ_arr
 		else
-			ℓ_range = max(ℓ_arr[1],ℓ_range[1]):min(ℓ_arr[end],ℓ_range[end])
+			ℓ_range = intersect(ℓ_arr,ℓ_range)
 		end
 
 		if isnothing(ν_ind_range)
 			ν_ind_range = 1:Nν_Gfn
 		else
-			ν_ind_range = max(1,ν_ind_range[1]):min(Nν_Gfn,ν_ind_range[end])
+			ν_ind_range = intersect(ν_ind_range,1:Nν_Gfn)
 		end
 
 		function Cω_summodes(rank)
 
-			tasks_on_proc = Main.parallel_utilities.split_product_across_processors(ℓ_range,ν_ind_range,nworkers(),rank) |> collect
+			modes_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,nworkers(),rank) |> collect
 
-			if isempty(tasks_on_proc)
-				return OffsetArray(zeros(ComplexF64,1),0)
-			end
+			proc_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,modes_on_proc,num_procs)
 
-			proc_range = Main.parallel_utilities.get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,tasks_on_proc,num_procs)
-
-			ν_ind_min = first(tasks_on_proc)[2]
-			ν_ind_max = last(tasks_on_proc)[2]
+			ν_ind_min = first(modes_on_proc)[2]
+			ν_ind_max = last(modes_on_proc)[2]
 			Nν_on_proc = ν_ind_max - ν_ind_min + 1
 
 			Cω_proc = OffsetArray(zeros(ComplexF64,Nν_on_proc),ν_ind_min:ν_ind_max)
@@ -1379,24 +1522,43 @@ module crosscov
 			r₂_ind = argmin(abs.(r .- x2.r))
 
 			for proc_id in proc_range
-				G_proc_file = joinpath(Gfn_path,@sprintf "Gfn_proc_%03d.fits" proc_id)
-				# file = jldopen(G_proc_file,"r")
-				file = FITS(G_proc_file,"r")
+
+				Gsrc_file = FITS(joinpath(Gfn_path_src,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
 
 				# Get a list of (ℓ,ω) in this file
-				tasks_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
+				modes_in_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
+				# ℓ_in_file = read(file1[2],"mode_l")
+				# ω_ind_in_file = read(file1[2],"mode_omega_ind")
 
-		    	for (ℓ,ω_ind) in intersect(tasks_file,tasks_on_proc)
+				# @assert(all(zip(ℓ_in_file,ω_ind_in_file) .== modes_in_file),"Modes obtained by splitting do not match those in file")
 
-		    		mode_index = get_index_in_split_array(tasks_file,(ℓ,ω_ind))
+		    	for (ℓ,ω_ind) in intersect(modes_in_file,modes_on_proc)
+
+		    		mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
+
+		    		@assert(!isnothing(mode_index),"mode index $mode_index for ($ℓ,$ω_ind) not found by splitting across processors")
+		    		# @assert((ℓ_in_file[mode_index]==ℓ) && (ω_ind_in_file[mode_index]==ω_ind),
+		    		# 	"Mode found by splitting does not match that in file. Mode index $mode_index in "*
+		    		# 	"file $(@sprintf "Gfn_proc_%03d.fits" proc_id)")
 		    		
-		    		G = read(file[1],:,:,1,1,mode_index)
-		    		α = G[:,1] + im*G[:,2]
+		    		# @assert(1<=mode_index<=size(file1[1],5),"mode index beyond file limits")
+
 		    		ω = ν_arr[ω_ind]*2π
 
-				    Cω_proc[ω_ind] += ω^2 * Powspec(ω) * (2ℓ+1)/4π * conj(α[r₁_ind]) * α[r₂_ind] * Pl_cosχ[ℓ]
+		    		G = read(Gsrc_file[1],r₁_ind,:,1,1,mode_index)
+		    		α_r₁ = G[1] + im*G[2]
+
+					if r₁_ind == r₂_ind
+		    			Cω_proc[ω_ind] += ω^2 * Powspec(ω) * (2ℓ+1)/4π * abs2(α_r₁) * Pl_cosχ[ℓ]
+		    		else
+						G = read(Gsrc_file[1],r₂_ind,:,1,1,mode_index)
+			    		α_r₂ = G[1] + im*G[2]
+			    		Cω_proc[ω_ind] += ω^2 * Powspec(ω) * (2ℓ+1)/4π * conj(α_r₁) * α_r₂ * Pl_cosχ[ℓ]
+		    		end
+				    
 				end
-				close(file)
+
+				close(Gsrc_file)
 				
 			end
 
@@ -1411,32 +1573,29 @@ module crosscov
 			@. Cω_arr[ax + ν_start_zeros] += Ci.parent
 		end
 
-		# G_proc_file = joinpath(Gfn_path,@sprintf "Gfn_proc_%03d.jld2" 1)
-		# @load G_proc_file Gfn_arr
-
 		return Cω_arr
 	end
 
-	Cω(n1::Point2D,n2::Point2D;r_obs::Real=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing) = Cω(Point3D(r_obs,n1),Point3D(r_obs,n2),ℓ_range=ℓ_range,ν_ind_range=ν_ind_range)
-	Cω(Δϕ::Real;r_obs::Real=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing) = Cω(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ℓ_range=ℓ_range,ν_ind_range=ν_ind_range)
+	Cω(n1::Point2D,n2::Point2D;r_obs::Real=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing) = Cω(Point3D(r_obs,n1),Point3D(r_obs,n2),ℓ_range=ℓ_range,ν_ind_range=ν_ind_range,r_src=r_src)
+	Cω(Δϕ::Real;r_obs::Real=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing) = Cω(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ℓ_range=ℓ_range,ν_ind_range=ν_ind_range,r_src=r_src)
 
-	function Cω(x1::Point3D,x2::Point3D,ν::Real;ℓ_range=nothing)
+	function Cω(x1::Point3D,x2::Point3D,ν::Real;r_src=Rsun-75e5,ℓ_range=nothing)
 		
-		Gfn_path = Gfn_path_from_source_radius(x1)
-		@load joinpath(Gfn_path,"parameters.jld2") ν_arr ν_start_zeros
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ν_start_zeros
 
 		ν_test_ind = argmin(abs.(ν_arr .- ν))
 
-		Cω(x1,x2,ℓ_range=ℓ_range,ν_ind_range=ν_test_ind:ν_test_ind)[ν_start_zeros + ν_test_ind]
+		Cω(x1,x2,ℓ_range=ℓ_range,ν_ind_range=ν_test_ind:ν_test_ind,r_src=r_src)[ν_start_zeros + ν_test_ind]
 	end
 
-	Cω(n1::Point2D,n2::Point2D,ν::Real;r_obs::Real=Rsun-75e5,ℓ_range=nothing) = Cω(Point3D(r_obs,n1),Point3D(r_obs,n2),ν,ℓ_range=ℓ_range)
-	Cω(Δϕ::Real,ν::Real;r_obs::Real=Rsun-75e5,ℓ_range=nothing) = Cω(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ν,ℓ_range=ℓ_range)
+	Cω(n1::Point2D,n2::Point2D,ν::Real;r_obs::Real=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = Cω(Point3D(r_obs,n1),Point3D(r_obs,n2),ν,ℓ_range=ℓ_range,r_src=r_src)
+	Cω(Δϕ::Real,ν::Real;r_obs::Real=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = Cω(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ν,ℓ_range=ℓ_range,r_src=r_src)
 
-	function Cω_onefreq_ℓspectrum(x1::Point3D,x2::Point3D,ν::Real;ℓ_range=nothing)
+	function Cω_onefreq_ℓspectrum(x1::Point3D,x2::Point3D,ν::Real;ℓ_range=nothing,r_src=Rsun-75e5)
 		
-		Gfn_path = Gfn_path_from_source_radius(x1)
-		@load joinpath(Gfn_path,"parameters.jld2") ν_arr ℓ_arr num_procs
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs
 
 		if !isnothing(ℓ_range)
 			ℓ_range = max(ℓ_range[1],ℓ_arr[1]):min(ℓ_range[end],ℓ_arr[end])
@@ -1445,7 +1604,9 @@ module crosscov
 		end
 
 		ν_test_ind = argmin(abs.(ν_arr .- ν))
-		Nν = length(ν_arr)
+		Nν_Gfn = length(ν_arr)
+
+		ω = 2π*ν_arr[ν_test_ind]
 
 		# @printf "ν=%.1e ℓmin:%d ℓmax:%d\n" ν_arr[ν_test_ind] ℓ_range[1] ℓ_range[end]
 
@@ -1460,29 +1621,46 @@ module crosscov
 
 		function Cω_summodes(rank)
 			
-			tasks_on_proc = Main.parallel_utilities.split_product_across_processors(ℓ_range,ν_test_ind:ν_test_ind,nworkers(),rank)
-			proc_range = Main.parallel_utilities.get_processor_range_from_split_array(ℓ_arr,1:Nν,tasks_on_proc,num_procs)
+			modes_on_proc = split_product_across_processors(ℓ_range,ν_test_ind:ν_test_ind,nworkers(),rank)
+			proc_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,modes_on_proc,num_procs)
 
 			Cν_ℓ = OffsetArray(zeros(ComplexF64,length(ℓ_range)),ℓ_range)
 
 			for proc_id in proc_range
-				G_proc_file = joinpath(Gfn_path,@sprintf "Gfn_proc_%03d.fits" proc_id)
-				file = FITS(G_proc_file,"r")
+				Gsrc_file = FITS(joinpath(Gfn_path_src,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
 
 				# Get a list of (ℓ,ω) in this file
-				tasks_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
+				modes_in_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
 
-				for (ℓ,ω_ind) in intersect(tasks_on_proc,tasks_file)
+				# ℓ_in_file = read(file[2],"mode_l")
+				# ω_ind_in_file = read(file[2],"mode_omega_ind")
+
+				# @assert(all(zip(ℓ_in_file,ω_ind_in_file) .== modes_in_file),"Modes obtained by splitting do not match those in file")
+
+				for (ℓ,ω_ind) in intersect(modes_on_proc,modes_in_file)
 					
-					mode_index = get_index_in_split_array(tasks_file,(ℓ,ω_ind))
+					mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
+
+					@assert(!isnothing(mode_index),"mode index $mode_index for ($ℓ,$ω_ind) not found by splitting across processors")
+		    		# @assert((ℓ_in_file[mode_index]==ℓ) && (ω_ind_in_file[mode_index]==ω_ind),
+		    		# 	"Mode found by splitting does not match that in file. Mode index $mode_index in "*
+		    		# 	"file $(@sprintf "Gfn_proc_%03d.fits" proc_id)")
 		    		
-		    		G = read(file[1],:,:,1,1,mode_index)
-		    		α = G[:,1] + im*G[:,2]
+		    		G = read(Gsrc_file[1],r₁_ind,:,1,1,mode_index)
+		    		α_r₁ = G[1] + im*G[2]
 
-					ω = 2π*ν_arr[ω_ind]
+					if r₁_ind == r₂_ind
+		    			Cν_ℓ[ℓ] = ω^2 * Powspec(ω) * (2ℓ+1)/4π * abs2(α_r₁) * Pl_cosχ[ℓ]
+		    		else
+						G = read(Gsrc_file[1],r₂_ind,:,1,1,mode_index)
+			    		α_r₂ = G[1] + im*G[2]
+			    		Cν_ℓ[ℓ] = ω^2 * Powspec(ω) * (2ℓ+1)/4π * conj(α_r₁) * α_r₂ * Pl_cosχ[ℓ]
+		    		end
 
-				    Cν_ℓ[ℓ] = ω^2 * Powspec(ω) * (2ℓ+1)/4π * conj(α[r₁_ind]) * α[r₂_ind] * Pl_cosχ[ℓ]
+				    
 				end
+
+				close(Gsrc_file)
 
 			end
 
@@ -1493,15 +1671,15 @@ module crosscov
 		Cν_ℓ = sum(Cω_summodes(rank) for (rank,p) in enumerate(workers_active(ℓ_range,ν_test_ind:ν_test_ind)) ) 
 	end
 
-	Cω_onefreq_ℓspectrum(Δϕ::Real=π/3,ν=3e-3;r_obs=Rsun-75e5,ℓ_range=nothing) = Cω_onefreq_ℓspectrum(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ℓ_range=ℓ_range)
+	Cω_onefreq_ℓspectrum(n1::Point2D,n2::Point2D,ν=3e-3;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = Cω_onefreq_ℓspectrum(Point3D(r_obs,n1),Point3D(r_obs,n2),ℓ_range=ℓ_range,r_src=r_src)
+	Cω_onefreq_ℓspectrum(Δϕ::Real,ν=3e-3;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = Cω_onefreq_ℓspectrum(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ℓ_range=ℓ_range,r_src=r_src)
 
-	function ∂ϕ₂Cω(x1::Point3D,x2::Point3D;ℓ_range=nothing,ν_ind_range=nothing)
+	function ∂ϕ₂Cω(x1::Point3D,x2::Point3D;ℓ_range=nothing,ν_ind_range=nothing,r_src=Rsun-75e5)
 		
-		Gfn_path = Gfn_path_from_source_radius(x1)
-		@load joinpath(Gfn_path,"parameters.jld2") ν_arr ℓ_arr num_procs ν_full ν_start_zeros
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs ν_start_zeros Nν
 
 		Nν_Gfn = length(ν_arr)
-		Nν_full = length(ν_full)
 
 		if isnothing(ℓ_range)
 			ℓ_range = ℓ_arr
@@ -1515,48 +1693,55 @@ module crosscov
 
 		function Cω_summodes(rank)
 
-			tasks_on_proc = Main.parallel_utilities.split_product_across_processors(ℓ_range,ν_ind_range,nworkers(),rank) |> collect
-			proc_range = Main.parallel_utilities.get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,tasks_on_proc,num_procs)
+			modes_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,nworkers(),rank) |> collect
+			proc_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,modes_on_proc,num_procs)
 
-			if isempty(tasks_on_proc)
-				return OffsetArray(zeros(ComplexF64,1),0)
-			end
-
-			ν_ind_min = first(tasks_on_proc)[2]
-			ν_ind_max = last(tasks_on_proc)[2]
+			ν_ind_min = first(modes_on_proc)[2]
+			ν_ind_max = last(modes_on_proc)[2]
 			Nν_on_proc = ν_ind_max - ν_ind_min + 1
 
 			Cω_proc = OffsetArray(zeros(ComplexF64,Nν_on_proc),ν_ind_min:ν_ind_max)
 
-			∂ϕ₂Pl_cosχ = dPl(cosχ(x1,x2),ℓmax=ℓ_arr[end]) .* ∂ϕ₂cosχ(x1,x2)
+			∂ϕ₂Pl_cosχ = dPl(cosχ(x1,x2),ℓmax=ℓ_range[end]) .* ∂ϕ₂cosχ(x1,x2)
 
 			r₁_ind = argmin(abs.(r .- x1.r))
 			r₂_ind = argmin(abs.(r .- x2.r))
 
 			for proc_id in proc_range
-				G_proc_file = joinpath(Gfn_path,@sprintf "Gfn_proc_%03d.fits" proc_id)
-				file = FITS(G_proc_file,"r")
+				Gsrc_file = FITS(joinpath(Gfn_path_src,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
 
 				# Get a list of (ℓ,ω) in this file
-				tasks_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
+				modes_in_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
 
-		    	for (ℓ,ω_ind) in intersect(tasks_on_proc,tasks_file)
+				# ℓ_in_file = read(file[2],"mode_l")
+				# ω_ind_in_file = read(file[2],"mode_omega_ind")
+
+				# @assert(all(zip(ℓ_in_file,ω_ind_in_file) .== modes_in_file),"Modes obtained by splitting do not match those in file")
+
+		    	for (ℓ,ω_ind) in intersect(modes_on_proc,modes_in_file)
 					
-					mode_index = get_index_in_split_array(tasks_file,(ℓ,ω_ind))
+					mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
-					if isnothing(mode_index)
-						continue
-					end
-		    		
-		    		G = read(file[1],:,:,1,1,mode_index)
-		    		α = G[:,1] + im*G[:,2]
+					@assert(!isnothing(mode_index),"mode index $mode_index for ($ℓ,$ω_ind) not found by splitting across processors")
+		    		# @assert((ℓ_in_file[mode_index]==ℓ) && (ω_ind_in_file[mode_index]==ω_ind),
+		    		# 	"Mode found by splitting does not match that in file. Mode index $mode_index in "*
+		    		# 	"file $(@sprintf "Gfn_proc_%03d.fits" proc_id)")
 
 		    		ω = 2π * ν_arr[ω_ind]
-				    
-				    Cω_proc[ω_ind] += ω^2 * Powspec(ω) * (2ℓ+1)/4π * conj(α[r₁_ind]) * α[r₂_ind] * ∂ϕ₂Pl_cosχ[ℓ]
+		    		
+		    		G = read(Gsrc_file[1],r₁_ind,:,1,1,mode_index)
+		    		α_r₁ = G[1] + im*G[2]
+
+		    		if r₁_ind == r₂_ind
+		    			Cω_proc[ω_ind] += ω^2 * Powspec(ω) * (2ℓ+1)/4π * abs2(α_r₁) * ∂ϕ₂Pl_cosχ[ℓ]
+		    		else
+						G = read(Gsrc_file[1],r₂_ind,:,1,1,mode_index)
+			    		α_r₂ = G[1] + im*G[2]
+			    		Cω_proc[ω_ind] += ω^2 * Powspec(ω) * (2ℓ+1)/4π * conj(α_r₁) * α_r₂ * ∂ϕ₂Pl_cosχ[ℓ]
+		    		end
 				end
 
-				close(file)
+				close(Gsrc_file)
 
 			end
 
@@ -1565,7 +1750,7 @@ module crosscov
 
 		futures = [@spawnat p Cω_summodes(rank) for (rank,p) in enumerate(workers_active(ℓ_range,ν_ind_range))]
 
-		Cω_arr = zeros(ComplexF64,Nν_full)
+		Cω_arr = zeros(ComplexF64,Nν)
 
 		for f in futures
 			Ci = fetch(f)
@@ -1576,41 +1761,41 @@ module crosscov
 		return Cω_arr
 	end
 
-	∂ϕ₂Cω(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing) = ∂ϕ₂Cω(Point3D(r_obs,n1),Point3D(r_obs,n2),ℓ_range=ℓ_range,ν_ind_range=ν_ind_range)
-	∂ϕ₂Cω(Δϕ::Real;r_obs=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing) = ∂ϕ₂Cω(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ℓ_range=ℓ_range,ν_ind_range=ν_ind_range)
+	∂ϕ₂Cω(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing) = ∂ϕ₂Cω(Point3D(r_obs,n1),Point3D(r_obs,n2),ℓ_range=ℓ_range,ν_ind_range=ν_ind_range,r_src=r_src)
+	∂ϕ₂Cω(Δϕ::Real;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing) = ∂ϕ₂Cω(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ℓ_range=ℓ_range,ν_ind_range=ν_ind_range,r_src=r_src)
 
-	function Ct(x1::Point3D,x2::Point3D;ℓ_range=nothing)
+	function Ct(x1::Point3D,x2::Point3D;ℓ_range=nothing,r_src=Rsun-75e5)
 		
 		Gfn_path = Gfn_path_from_source_radius(x1)
 		@load joinpath(Gfn_path,"parameters.jld2") dν
 
-		C = Cω(x1,x2,ℓ_range=ℓ_range)
+		C = Cω(x1,x2,ℓ_range=ℓ_range,r_src=r_src)
 		Nω = length(C)
 		Nt = 2*(Nω -1)
 		brfft(C,Nt) .* dν
 	end
 
-	Ct(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,ℓ_range=nothing) = Ct(Point3D(r_obs,n1),Point3D(r_obs,n2),ℓ_range=ℓ_range)
-	Ct(Δϕ::Real;r_obs=Rsun-75e5,ℓ_range=nothing) = Ct(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ℓ_range=ℓ_range)
+	Ct(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = Ct(Point3D(r_obs,n1),Point3D(r_obs,n2),ℓ_range=ℓ_range,r_src=r_src)
+	Ct(Δϕ::Real;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = Ct(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ℓ_range=ℓ_range,r_src=r_src)
 
-	function ∂ϕ₂Ct(x1::Point3D,x2::Point3D;ℓ_range=nothing)
+	function ∂ϕ₂Ct(x1::Point3D,x2::Point3D;ℓ_range=nothing,r_src=Rsun-75e5)
 		
 		Gfn_path = Gfn_path_from_source_radius(x1)
 		@load joinpath(Gfn_path,"parameters.jld2") dν
 
-		C = ∂ϕ₂Cω(x1,x2,ℓ_range=ℓ_range)
+		C = ∂ϕ₂Cω(x1,x2,ℓ_range=ℓ_range,r_src=r_src)
 		Nω = length(C)
 		Nt = 2*(Nω -1)
 		brfft(C,Nt) .*dν
 	end
 
-	∂ϕ₂Ct(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,ℓ_range=nothing) = ∂ϕ₂Ct(Point3D(r_obs,n1),Point3D(r_obs,n2);ℓ_range=ℓ_range)
-	∂ϕ₂Ct(Δϕ::Real;r_obs=Rsun-75e5,ℓ_range=nothing) = ∂ϕ₂Ct(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ);ℓ_range=ℓ_range)
+	∂ϕ₂Ct(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = ∂ϕ₂Ct(Point3D(r_obs,n1),Point3D(r_obs,n2);ℓ_range=ℓ_range,r_src=r_src)
+	∂ϕ₂Ct(Δϕ::Real;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = ∂ϕ₂Ct(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ);ℓ_range=ℓ_range,r_src=r_src)
 
-	function CΔϕω(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;ℓ_range=nothing)
+	function CΔϕω(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;ℓ_range=nothing,r_src=Rsun-75e5)
 
-		Gfn_path = Greenfn_radial.Gfn_path_from_source_radius(r₁)
-		@load joinpath(Gfn_path,"parameters.jld2") ν_arr ℓ_arr num_procs ν_full ν_start_zeros
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs ν_full ν_start_zeros
 
 		Nν = length(ν_arr)
 
@@ -1618,7 +1803,7 @@ module crosscov
 		r₂_ind = argmin(abs.(r .- r₂))
 
 		if !isnothing(ℓ_range)
-			ℓ_range = max(ℓ_range[1],ℓ_arr[1]):min(ℓ_range[end],ℓ_arr[end])
+			ℓ_range = intersect(ℓ_range,ℓ_arr)
 		else
 			ℓ_range = ℓ_arr
 		end
@@ -1638,38 +1823,55 @@ module crosscov
 		Pl_cosχ = collect(transpose(Pl_cosχ))
 
 		function Cϕω_summodes(rank)
-			tasks_on_proc = Main.parallel_utilities.split_product_across_processors(ℓ_range,1:Nν,nworkers(),rank)
-			proc_range = Main.parallel_utilities.get_processor_range_from_split_array(ℓ_arr,1:Nν,tasks_on_proc,num_procs)
+			modes_on_proc = split_product_across_processors(ℓ_range,1:Nν,nworkers(),rank)
+			proc_range = get_processor_range_from_split_array(ℓ_arr,1:Nν,modes_on_proc,num_procs)
 
-			ν_min_ind = first(collect(tasks_on_proc))[2]
-			ν_max_ind = last(collect(tasks_on_proc))[2]
+			ν_min_ind = first(collect(modes_on_proc))[2]
+			ν_max_ind = last(collect(modes_on_proc))[2]
 			Nν_on_proc = ν_max_ind - ν_min_ind + 1
 
 			Cϕω_arr = OffsetArray(zeros(ComplexF64,nϕ,Nν_on_proc),(1:nϕ,ν_min_ind:ν_max_ind))
 
 			for proc_id in proc_range
-				G_proc_file = joinpath(Gfn_path,@sprintf "Gfn_proc_%03d.fits" proc_id)
-		    	
-		    	file = FITS(G_proc_file,"r")
+				Gsrc_file = FITS(joinpath(Gfn_path_src,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
 
 		    	# Get a list of (ℓ,ω) in this file
-				tasks_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
+				modes_in_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
 
-		    	for (ℓ,ω_ind) in intersect(tasks_on_proc,tasks_file)
+				# ℓ_in_file = read(file[2],"mode_l")
+				# ω_ind_in_file = read(file[2],"mode_omega_ind")
+
+				# @assert(all(zip(ℓ_in_file,ω_ind_in_file) .== modes_in_file),"Modes obtained by splitting do not match those in file")
+
+		    	for (ℓ,ω_ind) in intersect(modes_on_proc,modes_in_file)
 					
-					mode_index = get_index_in_split_array(tasks_file,(ℓ,ω_ind))
-		    		
-		    		G = read(file[1],:,:,1,1,mode_index)
-		    		α = G[:,1] + im*G[:,2]
+					mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
+
+					@assert(!isnothing(mode_index),"mode index $mode_index for ($ℓ,$ω_ind) not found by splitting across processors")
+		    		# @assert((ℓ_in_file[mode_index]==ℓ) && (ω_ind_in_file[mode_index]==ω_ind),
+		    		# 	"Mode found by splitting does not match that in file. Mode index $mode_index in "*
+		    		# 	"file $(@sprintf "Gfn_proc_%03d.fits" proc_id)")
 
 		    		ω = 2π * ν_arr[ω_ind]
-				    
-				    for ϕ_ind in 1:nϕ
-				    	Cϕω_arr[ϕ_ind,ω_ind] += ω^2 * Powspec(ω) * (2ℓ+1)/4π * conj(α[r₁_ind]) * α[r₂_ind] * Pl_cosχ[ϕ_ind,ℓ]
-				    end
+		    		
+		    		G = read(file1[1],r₁_ind,:,1,1,mode_index)
+		    		α_r₁ = G[1] + im*G[2]
+
+		    		if r₁_ind == r₂_ind
+		    			for ϕ_ind in 1:nϕ
+					    	Cϕω_arr[ϕ_ind,ω_ind] += ω^2 * Powspec(ω) * (2ℓ+1)/4π * abs2(α_r₁) * Pl_cosχ[ϕ_ind,ℓ]
+					    end
+		    		else
+						G = read(file2[1],r₂_ind,:,1,1,mode_index)
+			    		α_r₂ = G[1] + im*G[2]
+			    		for ϕ_ind in 1:nϕ
+					    	Cϕω_arr[ϕ_ind,ω_ind] += ω^2 * Powspec(ω) * (2ℓ+1)/4π * conj(α_r₁) * α_r₂ * Pl_cosχ[ϕ_ind,ℓ]
+					    end
+		    		end
+
 				end
 
-				close(file)
+				close(Gsrc_file)
 			end
 
 			return Cϕω_arr
@@ -1686,23 +1888,26 @@ module crosscov
 		return Cϕω_arr
 	end
 
-	function CΔϕt(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;ℓ_range=nothing) 
+	function CΔϕt(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;ℓ_range=nothing,r_src=Rsun-75e5) 
 
-		C = CΔϕω(r₁,r₂,ℓ_range=ℓ_range)
+		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
+		@load joinpath(Gfn_path_x1,"parameters.jld2") dν
+
+		C = CΔϕω(r₁,r₂,ℓ_range=ℓ_range,r_src=r_src)
 		Nω = length(C)
 		Nt = 2*(Nω - 1)
 	
-		return irfft(C,Nt,2)
+		return brfft(C,Nt,2).*dν
 	end
 
-	Cmω(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;ℓ_range=nothing) = fft(CΔϕω(r₁,r₂,ℓ_range=ℓ_range),1)
+	Cmω(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;ℓ_range=nothing,r_src=Rsun-75e5) = fft(CΔϕω(r₁,r₂,ℓ_range=ℓ_range,r_src=r_src),1)
 
-	function Cτ_rotating(x1::Point3D,x2::Point3D;Ω_rot = 20e2/Rsun,τ_ind_arr = nothing)
+	function Cτ_rotating(x1::Point3D,x2::Point3D;Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,ℓ_range=nothing,r_src=Rsun-75e5)
 		
 		# Return C(Δϕ,ω) = RFFT(C(Δϕ,τ)) = RFFT(IRFFT(C0(Δϕ - Ωτ,ω))(τ))
 
-		Gfn_path = Gfn_path_from_source_radius(x1)
-		@load joinpath(Gfn_path,"parameters.jld2") ν_full Nt dt
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_full Nt dt
 
 		if isnothing(τ_ind_arr)
 			τ_ind_arr = 1:div(Nt,2)
@@ -1710,19 +1915,19 @@ module crosscov
 
 		Nτ = length(τ_ind_arr)
 
-		Cτ_arr = OffsetArray(zeros(Nτ),τ_ind_arr)
+		Cτ_arr = OffsetArray{Float64}(undef,τ_ind_arr)
 	    
 		for τ_ind in τ_ind_arr
 			τ = (τ_ind-1) * dt
 	    	x2′ = Point3D(x2.r,x2.θ,x2.ϕ-Ω_rot*τ)
-	    	Cτ_arr[τ_ind] = Ct(x1,x2′)[τ_ind]
+	    	Cτ_arr[τ_ind] = Ct(x1,x2′,ℓ_range=ℓ_range,r_src=r_src)[τ_ind]
 	    end
 
 		return Cτ_arr
 	end
 
-	Cτ_rotating(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,Ω_rot = 20e2/Rsun,τ_ind_arr = nothing) = Cτ_rotating(Point3D(r_obs,n1),Point3D(r_obs,n2),Ω_rot = Ω_rot,τ_ind_arr = τ_ind_arr)
-	Cτ_rotating(Δϕ::Real;r_obs=Rsun-75e5,Ω_rot = 20e2/Rsun,τ_ind_arr = nothing) = Cτ_rotating(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),Ω_rot = Ω_rot,τ_ind_arr = τ_ind_arr)
+	Cτ_rotating(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,ℓ_range=nothing) = Cτ_rotating(Point3D(r_obs,n1),Point3D(r_obs,n2),Ω_rot = Ω_rot,τ_ind_arr = τ_ind_arr,r_src=r_src)
+	Cτ_rotating(Δϕ::Real;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,ℓ_range=nothing) = Cτ_rotating(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),Ω_rot = Ω_rot,τ_ind_arr = τ_ind_arr,ℓ_range=ℓ_range,r_src=r_src)
 
 	
 	# function δCω_uniform_rotation_firstborn(x1 = Point3D(Rsun-75e5,π/2,0),x2=Point3D(Rsun-75e5,π/2,π/3),ν=3e-3;Ω_rot = 20e2/Rsun)
@@ -1785,11 +1990,15 @@ module crosscov
 
 	#######################################################################################################################################
 
-	function δCω_uniform_rotation_firstborn_integrated_over_angle(x1::Point3D,x2::Point3D,ν::Real;Ω_rot = 20e2/Rsun,ℓ_range=nothing)
-		Gfn_path = Gfn_path_from_source_radius(x1)
-		r₁_ind = argmin(abs.(r .- x1.r))
+	function δCω_uniform_rotation_firstborn_integrated_over_angle(x1::Point3D,x2::Point3D,ν::Real;Ω_rot = 20e2/Rsun,ℓ_range=nothing,r_src=Rsun-75e5)
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
+		Gfn_path_x2 = Gfn_path_from_source_radius(x2)
 
-		@load joinpath(Gfn_path,"parameters.jld2") ν_arr ℓ_arr num_procs
+		r₁_ind = argmin(abs.(r .- x1.r))
+		r₂_ind = argmin(abs.(r .- x2.r))
+
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs
 
 		if !isnothing(ℓ_range)
 			ℓ_range = max(ℓ_range[1],ℓ_arr[1]):min(ℓ_range[end],ℓ_arr[end])
@@ -1808,47 +2017,80 @@ module crosscov
 
 		ℓmax = ℓ_arr[end]
 
-		dPl_cosχ = dPl(cosχ(x1,x2),ℓmax=ℓmax)
+		∂ϕ₂Pl_cosχ = dPl(cosχ(x1,x2),ℓmax=ℓmax).*∂ϕ₂cosχ(x1,x2)
 
 		# Gfn_arr = load_Greenfn_radial_coordinates_onefreq(Gfn_path,ν,ν_arr,ℓ_arr,num_procs)
 
 		δC = zero(ComplexF64)
 
 		function δC_summodes(rank)
-			tasks_on_proc = Main.parallel_utilities.split_product_across_processors(ℓ_range,ν_test_ind:ν_test_ind,nworkers(),rank)
-			proc_id_range = Main.parallel_utilities.get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,tasks_on_proc,num_procs)
-
-			if isempty(proc_id_range)
-				return zero(ComplexF64)
-			end
+			modes_on_proc = split_product_across_processors(ℓ_range,ν_test_ind:ν_test_ind,nworkers(),rank)
+			proc_id_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,modes_on_proc,num_procs)
 
 			δC_r = zeros(ComplexF64,nr)
 
+			δG_r₁_rsrc = zeros(ComplexF64,nr)
+			δG_r₂_rsrc = zeros(ComplexF64,nr)
+
 			for proc_id in proc_id_range
 
-				G_proc_file = joinpath(Gfn_path,@sprintf "Gfn_proc_%03d.fits" proc_id)
-				if !isfile(G_proc_file)
-					continue
-				end
-
-				file =  FITS(G_proc_file ,"r")
+				Gsrc_file = FITS(joinpath(Gfn_path_src,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
+				Gobs1_file = FITS(joinpath(Gfn_path_x1,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
+				Gobs2_file = FITS(joinpath(Gfn_path_x2,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
 
 				# Get a list of (ℓ,ω) in this file
-				tasks_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
+				modes_in_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
 
-				for (ℓ,ω_ind) in intersect(tasks_on_proc,tasks_file)
+				# ℓ_in_file = read(file1[2],"mode_l")
+				# ω_ind_in_file = read(file1[2],"mode_omega_ind")
+
+				# @assert(all(zip(ℓ_in_file,ω_ind_in_file) .== modes_in_file),"Modes obtained by splitting do not match those in file")
+
+				for (ℓ,ω_ind) in intersect(modes_on_proc,modes_in_file)
 					
-					mode_index = get_index_in_split_array(tasks_file,(ℓ,ω_ind))
-		    		
-		    		G = read(file[1],:,:,1:2,1,mode_index)
-		    		G0 = G[:,1,1] + im*G[:,2,1]
-		    		G1 = G[:,1,2] + im*G[:,2,2]
+					mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
-				    δC_r .+= (2ℓ+1)/4π*dPl_cosχ[ℓ]*∂ϕ₂cosχ(x1,x2) .* (
-				    			@. real(G0[r₁_ind] * conj( G0^2 - 2G0*G1/Ω(ℓ,0) + (ℓ*(ℓ+1)-1)*(G1/Ω(ℓ,0))^2 ) ) )
+					@assert(!isnothing(mode_index),"mode index $mode_index for ($ℓ,$ω_ind) not found by splitting across processors")
+		    		# @assert((ℓ_in_file[mode_index]==ℓ) && (ω_ind_in_file[mode_index]==ω_ind),
+		    		# 	"Mode found by splitting does not match that in file. Mode index $mode_index in "*
+		    		# 	"file $(@sprintf "Gfn_proc_%03d.fits" proc_id)")
+		    		
+		    		G = read(Gsrc_file[1],:,:,1:2,1,mode_index)
+		    		Gsrc_0 = G[:,1,1] + im*G[:,2,1]
+		    		Gsrc_1 = G[:,1,2] + im*G[:,2,2]
+		    		G_r₁_rsrc = Gsrc_0[r₁_ind]
+		    		G_r₂_rsrc = Gsrc_0[r₂_ind]
+
+		    		G = read(Gobs1_file[1],:,:,1:2,1,mode_index)
+		    		Gobs1_0 = G[:,1,1] + im*G[:,2,1]
+		    		Gobs1_1 = G[:,1,2] + im*G[:,2,2]
+
+		    		@. δG_r₁_rsrc = Gsrc_0 * Gobs1_0 - Gsrc_0 * Gobs1_1/Ω(ℓ,0) - Gsrc_1 * Gobs1_0/Ω(ℓ,0) +
+				    								 (ℓ*(ℓ+1)-1) * Gsrc_1 * Gobs1_1/Ω(ℓ,0)^2
+
+				    Gobs1_0 = nothing; Gobs1_1 = nothing;
+
+		    		if r₁_ind != r₂_ind
+
+			    		G = read(Gobs2_file[1],:,:,1:2,1,mode_index)
+			    		Gobs2_0 = G[:,1,1] + im*G[:,2,1]
+			    		Gobs2_1 = G[:,1,2] + im*G[:,2,2]
+
+			    		@. δG_r₂_rsrc = Gsrc_0 * Gobs2_0 - Gsrc_0 * Gobs2_1/Ω(ℓ,0) - Gsrc_1 * Gobs2_0/Ω(ℓ,0) +
+					    								 (ℓ*(ℓ+1)-1) * Gsrc_1 * Gobs2_1/Ω(ℓ,0)^2
+
+					    Gobs2_0 = nothing; Gobs2_1 = nothing;
+					    @. δC_r += (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * (conj(G_r₁_rsrc) * δG_r₂_rsrc + conj(δG_r₁_rsrc) * G_r₂_rsrc) 
+					else
+						# δG_r₂_rsrc = δG_r₁_rsrc
+						@. δC_r += (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * 2*real(conj(G_r₁_rsrc) * δG_r₁_rsrc)
+					end
+				    
 				end
 
-				close(file)
+				close(Gsrc_file)
+				close(Gobs1_file)
+				close(Gobs2_file)
 
 			end
 
@@ -1860,22 +2102,26 @@ module crosscov
 
 		δC = sum(fetch.(futures))
 
-		return -4im*Ω_rot*ω^3*Powspec(ω)*δC
+		return -2im*Ω_rot*ω^3*Powspec(ω)*δC
 	end
 
-	function δCω_uniform_rotation_firstborn_integrated_over_angle(Δϕ::Real,ν::Real;Ω_rot = 20e2/Rsun,r_obs = Rsun - 75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_firstborn_integrated_over_angle(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ν,Ω_rot=Ω_rot,ℓ_range=ℓ_range)
+	function δCω_uniform_rotation_firstborn_integrated_over_angle(Δϕ::Real,ν::Real;Ω_rot = 20e2/Rsun,r_obs = Rsun - 75e5,r_src=Rsun-75e5,ℓ_range=nothing)
+		δCω_uniform_rotation_firstborn_integrated_over_angle(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ν,Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
 	end
 
-	function δCω_uniform_rotation_firstborn_integrated_over_angle(n1::Point2D,n2::Point2D,ν::Real;Ω_rot = 20e2/Rsun,r_obs = Rsun - 75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_firstborn_integrated_over_angle(Point3D(r_obs,n1),Point3D(r_obs,n2),ν,Ω_rot=Ω_rot,ℓ_range=ℓ_range)
+	function δCω_uniform_rotation_firstborn_integrated_over_angle(n1::Point2D,n2::Point2D,ν::Real;Ω_rot = 20e2/Rsun,r_obs = Rsun - 75e5,r_src=Rsun-75e5,ℓ_range=nothing)
+		δCω_uniform_rotation_firstborn_integrated_over_angle(Point3D(r_obs,n1),Point3D(r_obs,n2),ν,Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
 	end
 
-	function δCω_uniform_rotation_firstborn_integrated_over_angle(x1::Point3D,x2::Point3D;Ω_rot = 20e2/Rsun,ℓ_range=nothing)
-		Gfn_path = Gfn_path_from_source_radius(x1)
+	function δCω_uniform_rotation_firstborn_integrated_over_angle(x1::Point3D,x2::Point3D;Ω_rot = 20e2/Rsun,ℓ_range=nothing,r_src=Rsun-75e5)
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
+		Gfn_path_x2 = Gfn_path_from_source_radius(x2)
+
 		r₁_ind = argmin(abs.(r .- x1.r))
+		r₂_ind = argmin(abs.(r .- x2.r))
 
-		@load joinpath(Gfn_path,"parameters.jld2") ν_arr ℓ_arr num_procs
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs
 
 		if !isnothing(ℓ_range)
 			ℓ_range = max(ℓ_range[1],ℓ_arr[1]):min(ℓ_range[end],ℓ_arr[end])
@@ -1896,51 +2142,87 @@ module crosscov
 		δC = zeros(ComplexF64,Nν_Gfn)
 
 		function δC_summodes(rank)
-			tasks_on_proc = collect(Main.parallel_utilities.split_product_across_processors(ℓ_range,1:Nν_Gfn,nworkers(),rank))
+			modes_on_proc = collect(Main.parallel_utilities.split_product_across_processors(ℓ_range,1:Nν_Gfn,nworkers(),rank))
 
-			if isempty(tasks_on_proc)
+			if isempty(modes_on_proc)
 				return OffsetArray(zeros(ComplexF64,1),1:1)
 			end
 
-			proc_range = Main.parallel_utilities.get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,tasks_on_proc,num_procs)
+			proc_range = Main.parallel_utilities.get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,modes_on_proc,num_procs)
 
-			ν_min_ind = first(collect(tasks_on_proc))[2]
-			ν_max_ind = last(collect(tasks_on_proc))[2]
+			ν_min_ind = first(collect(modes_on_proc))[2]
+			ν_max_ind = last(collect(modes_on_proc))[2]
 			Nν_on_proc = ν_max_ind - ν_min_ind + 1
 
 			δC_r = OffsetArray(zeros(ComplexF64,nr,Nν_on_proc),1:nr,ν_min_ind:ν_max_ind)
 
+			δG_r₁_rsrc = zeros(ComplexF64,nr)
+			δG_r₂_rsrc = zeros(ComplexF64,nr)
+
 			for proc_id in proc_range
 
-				G_proc_file = joinpath(Gfn_path,@sprintf "Gfn_proc_%03d.fits" proc_id)
-				if !isfile(G_proc_file)
-					continue
-				end
-
-				file =  FITS(G_proc_file ,"r")
+				Gsrc_file = FITS(joinpath(Gfn_path_src,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
+				Gobs1_file = FITS(joinpath(Gfn_path_x1,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
+				Gobs2_file = FITS(joinpath(Gfn_path_x2,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
 
 				# Get a list of (ℓ,ω) in this file
-				tasks_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
+				modes_in_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
 
-				for (ℓ,ω_ind) in intersect(tasks_on_proc,tasks_file)
+				# ℓ_in_file = read(file1[2],"mode_l")
+				# ω_ind_in_file = read(file1[2],"mode_omega_ind")
+
+				# @assert(all(zip(ℓ_in_file,ω_ind_in_file) .== modes_in_file),"Modes obtained by splitting do not match those in file")
+
+				for (ℓ,ω_ind) in intersect(modes_on_proc,modes_in_file)
 					
-					mode_index = get_index_in_split_array(tasks_file,(ℓ,ω_ind))
+					mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
+
+					@assert(!isnothing(mode_index),"mode index $mode_index for ($ℓ,$ω_ind) not found by splitting across processors")
+		    		# @assert((ℓ_in_file[mode_index]==ℓ) && (ω_ind_in_file[mode_index]==ω_ind),
+		    		# 	"Mode found by splitting does not match that in file. Mode index $mode_index in "*
+		    		# 	"file $(@sprintf "Gfn_proc_%03d.fits" proc_id)")
+
+		    		ω = 2π*ν_arr[ω_ind]
 		    		
-		    		G = read(file[1],:,:,1:2,1,mode_index)
-		    		G0 = G[:,1,1] + im*G[:,2,1]
-		    		G1 = G[:,1,2] + im*G[:,2,2]
+		    		G = read(Gsrc_file[1],:,:,1:2,1,mode_index)
+		    		Gsrc_0 = G[:,1,1] + im*G[:,2,1]
+		    		Gsrc_1 = G[:,1,2] + im*G[:,2,2]
+		    		G_r₁_rsrc = Gsrc_0[r₁_ind]
+		    		G_r₂_rsrc = Gsrc_0[r₂_ind]
 
-				    ω = 2π*ν_arr[ω_ind]
+		    		G = read(Gobs1_file[1],:,:,1:2,1,mode_index)
+		    		Gobs1_0 = G[:,1,1] + im*G[:,2,1]
+		    		Gobs1_1 = G[:,1,2] + im*G[:,2,2]
 
-				    @. δC_r[:,ω_ind] .+= ω^3*Powspec(ω)* (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] .* (
-				    			real(G0[r₁_ind] * conj( G0^2 - 2G0*G1/Ω(ℓ,0) + (ℓ*(ℓ+1)-1)*(G1/Ω(ℓ,0))^2 ) ) )
+		    		@. δG_r₁_rsrc = Gsrc_0 * Gobs1_0 - Gsrc_0 * Gobs1_1/Ω(ℓ,0) - Gsrc_1 * Gobs1_0/Ω(ℓ,0) +
+				    								 (ℓ*(ℓ+1)-1) * Gsrc_1 * Gobs1_1/Ω(ℓ,0)^2
+
+				    Gobs1_0 = nothing; Gobs1_1 = nothing;
+
+		    		if r₁_ind != r₂_ind
+
+			    		G = read(Gobs2_file[1],:,:,1:2,1,mode_index)
+			    		Gobs2_0 = G[:,1,1] + im*G[:,2,1]
+			    		Gobs2_1 = G[:,1,2] + im*G[:,2,2]
+
+			    		@. δG_r₂_rsrc = Gsrc_0 * Gobs2_0 - Gsrc_0 * Gobs2_1/Ω(ℓ,0) - Gsrc_1 * Gobs2_0/Ω(ℓ,0) +
+					    								 (ℓ*(ℓ+1)-1) * Gsrc_1 * Gobs2_1/Ω(ℓ,0)^2
+
+					    Gobs2_0 = nothing; Gobs2_1 = nothing;
+					    @. δC_r[:,ω_ind] += ω^3*Powspec(ω)* (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * (conj(G_r₁_rsrc) * δG_r₂_rsrc + conj(δG_r₁_rsrc) * G_r₂_rsrc) 
+					else
+						@. δC_r[:,ω_ind] += ω^3*Powspec(ω)* (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * 2*real(conj(G_r₁_rsrc) * δG_r₁_rsrc)
+					end
+
 				end
 
-				close(file)
+				close(Gsrc_file)
+				close(Gobs1_file)
+				close(Gobs2_file)
 
 			end
 
-			return OffsetArray(integrate.simps((@. r^2 * ρ * δC_r.parent),x=r,axis=0),ν_min_ind:ν_max_ind)
+			return OffsetArray(integrate.simps((@. r^2 * ρ * δC_r.parent),x=r,axis=0),axes(δC_r,2))
 
 		end
 
@@ -1952,29 +2234,30 @@ module crosscov
 			@. δC[ax] += δC_i
 		end
 
-		return @. -4im*Ω_rot*δC
+		return @. -2im*Ω_rot*δC
 	end
 
-	function δCω_uniform_rotation_firstborn_integrated_over_angle(Δϕ::Real;Ω_rot = 20e2/Rsun,r_obs = Rsun - 75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_firstborn_integrated_over_angle(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),Ω_rot=Ω_rot,ℓ_range=ℓ_range)
+	function δCω_uniform_rotation_firstborn_integrated_over_angle(Δϕ::Real;Ω_rot = 20e2/Rsun,r_obs = Rsun - 75e5,r_src=Rsun-75e5,ℓ_range=nothing)
+		δCω_uniform_rotation_firstborn_integrated_over_angle(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
 	end
 
-	function δCω_uniform_rotation_firstborn_integrated_over_angle(n1::Point2D,n2::Point2D;Ω_rot = 20e2/Rsun,r_obs = Rsun - 75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_firstborn_integrated_over_angle(Point3D(r_obs,n1),Point3D(r_obs,n2),Ω_rot=Ω_rot,ℓ_range=ℓ_range)
+	function δCω_uniform_rotation_firstborn_integrated_over_angle(n1::Point2D,n2::Point2D;Ω_rot = 20e2/Rsun,r_obs = Rsun - 75e5,r_src=Rsun-75e5,ℓ_range=nothing)
+		δCω_uniform_rotation_firstborn_integrated_over_angle(Point3D(r_obs,n1),Point3D(r_obs,n2),Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
 	end
 
 	########################################################################################################################################
 
 
-	function δCω_uniform_rotation_rotatedwaves_linearapprox(x1::Point3D,x2::Point3D,ν::Real;Ω_rot= 20e2/Rsun,ℓ_range=nothing)
+	function δCω_uniform_rotation_rotatedwaves_linearapprox(x1::Point3D,x2::Point3D,ν::Real;Ω_rot= 20e2/Rsun,ℓ_range=nothing,r_src=Rsun-75e5)
 		
 		# We compute δC(x1,x2) = -iΩ ∑ℓ (2ℓ+1)/4π ∂ω (ω^2 P(ω) αℓω*(r₂)αℓω(r₁))∂Δϕ Pl(cos(Δϕ))
 		
-		Gfn_path = Gfn_path_from_source_radius(x1)
-		@load joinpath(Gfn_path,"parameters.jld2") ν_arr ℓ_arr num_procs dν ν_start_zeros
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs dν ν_start_zeros
 
 		if !isnothing(ℓ_range)
-			ℓ_range = max(ℓ_range[1],ℓ_arr[1]):min(ℓ_range[end],ℓ_arr[end])
+			ℓ_range = intersect(ℓ_range,ℓ_arr)
 		else
 			ℓ_range = ℓ_arr
 		end
@@ -1988,52 +2271,52 @@ module crosscov
 		ν_match_index = ν_test_ind - ν_ind_range[1] + 1
 		dω = 2π*dν
 
-		∂ϕC = ∂ϕ₂Cω(x1,x2,ν_ind_range=ν_ind_range,ℓ_range=ℓ_range)[ν_ind_range .+ ν_start_zeros]
+		∂ϕC = ∂ϕ₂Cω(x1,x2,ν_ind_range=ν_ind_range,ℓ_range=ℓ_range,r_src=r_src)[ν_ind_range .+ ν_start_zeros]
 
 	    ∂ω∂ϕC = D(length(∂ϕC))*∂ϕC ./ dω
 
 		return -im*Ω_rot*∂ω∂ϕC[ν_match_index]
 	end
 
-	function δCω_uniform_rotation_rotatedwaves_linearapprox(Δϕ::Real,ν::Real;Ω_rot= 20e2/Rsun,r_obs=Rsun-75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,π/3),ν,Ω_rot=Ω_rot,ℓ_range=ℓ_range)
+	function δCω_uniform_rotation_rotatedwaves_linearapprox(Δϕ::Real,ν::Real;Ω_rot= 20e2/Rsun,r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing)
+		δCω_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,π/3),ν,Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
 	end
 
-	function δCω_uniform_rotation_rotatedwaves_linearapprox(n1::Point2D,n2::Point2D,ν::Real;Ω_rot= 20e2/Rsun,r_obs=Rsun-75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,n1),Point3D(r_obs,n2),ν,Ω_rot=Ω_rot,ℓ_range=ℓ_range)
+	function δCω_uniform_rotation_rotatedwaves_linearapprox(n1::Point2D,n2::Point2D,ν::Real;Ω_rot= 20e2/Rsun,r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing)
+		δCω_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,n1),Point3D(r_obs,n2),ν,Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
 	end
 
-	function δCω_uniform_rotation_rotatedwaves_linearapprox(x1::Point3D,x2::Point3D;Ω_rot= 20e2/Rsun,ℓ_range=nothing)
+	function δCω_uniform_rotation_rotatedwaves_linearapprox(x1::Point3D,x2::Point3D;Ω_rot= 20e2/Rsun,ℓ_range=nothing,r_src=Rsun-75e5)
 		
 		# We compute δC(x1,x2) = -iΩ ∑ℓ (2ℓ+1)/4π ∂ω (ω^2 P(ω) αℓω*(r₂)αℓω(r₁))∂Δϕ Pl(cos(Δϕ))
 		
-		Gfn_path = Gfn_path_from_source_radius(x1)
-		@load joinpath(Gfn_path,"parameters.jld2") ν_arr ℓ_arr num_procs dν
+		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
+		@load joinpath(Gfn_path_x1,"parameters.jld2") ν_arr ℓ_arr num_procs dν
 
 		if !isnothing(ℓ_range)
-			ℓ_range = max(ℓ_range[1],ℓ_arr[1]):min(ℓ_range[end],ℓ_arr[end])
+			ℓ_range = intersect(ℓ_range,ℓ_arr)
 		else
 			ℓ_range = ℓ_arr
 		end
 	
 		dω = 2π*dν
 
-		∂ϕC = ∂ϕ₂Cω(x1,x2,ℓ_range=ℓ_range)
+		∂ϕC = ∂ϕ₂Cω(x1,x2,ℓ_range=ℓ_range,r_src=r_src)
 
 	    ∂ω∂ϕC = D(length(∂ϕC))*∂ϕC ./ dω
 
 		return @. -im*Ω_rot*∂ω∂ϕC
 	end
 
-	function δCω_uniform_rotation_rotatedwaves_linearapprox(n1::Point2D,n2::Point2D;Ω_rot= 20e2/Rsun,r_obs=Rsun-75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,n1),Point3D(r_obs,n2),Ω_rot=Ω_rot,ℓ_range=ℓ_range)
+	function δCω_uniform_rotation_rotatedwaves_linearapprox(n1::Point2D,n2::Point2D;Ω_rot= 20e2/Rsun,r_obs=Rsun-75e5,ℓ_range=nothing,r_src=Rsun-75e5)
+		δCω_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,n1),Point3D(r_obs,n2),Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
 	end
 
-	function δCω_uniform_rotation_rotatedwaves_linearapprox(Δϕ::Real;Ω_rot= 20e2/Rsun,r_obs=Rsun-75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,π/3),Ω_rot=Ω_rot,ℓ_range=ℓ_range)
+	function δCω_uniform_rotation_rotatedwaves_linearapprox(Δϕ::Real;Ω_rot= 20e2/Rsun,r_obs=Rsun-75e5,ℓ_range=nothing,r_src=Rsun-75e5)
+		δCω_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,π/3),Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
 	end
 
-	function δCω_uniform_rotation_rotatedwaves(Δϕ::Real,ν=3e-3;Ω_rot= 20e2/Rsun,ℓ_range=nothing)
+	function δCω_uniform_rotation_rotatedwaves(Δϕ::Real,ν=3e-3;Ω_rot= 20e2/Rsun,ℓ_range=nothing,r_src=Rsun-75e5)
 		# We compute δC(Δϕ,ω) = C′(Δϕ,ω) -  C(Δϕ,ω)
 		C′(Δϕ,ω) = ifft(C(m,ω+mΩ),1)
 		C0ωm_arr = collect(transpose(Cmω(;ℓ_range=ℓ_range)))
@@ -2059,14 +2342,14 @@ module crosscov
 
 		function interpolate_over_mω(rank)
 			
-			tasks_on_proc = Main.parallel_utilities.split_product_across_processors(1:Nν,1:nm,nworkers(),rank)
+			modes_on_proc = Main.parallel_utilities.split_product_across_processors(1:Nν,1:nm,nworkers(),rank)
 
-			C′ωm_arr = zeros(ComplexF64,length(tasks_on_proc))
+			C′ωm_arr = zeros(ComplexF64,length(modes_on_proc))
 
-			m_ind_prev = first(tasks_on_proc)[2]
+			m_ind_prev = first(modes_on_proc)[2]
 			Cω_interp_fn = interpolate((ω_arr_full,), C0ωm_arr[:,m_ind_prev], Gridded(Linear()))	
 
-			for (mode_ind,(ω_ind,m_ind)) in enumerate(tasks_on_proc)
+			for (mode_ind,(ω_ind,m_ind)) in enumerate(modes_on_proc)
 				m = m_arr[m_ind]; ω = ω_arr[ω_ind]
 
 				if m_ind != m_ind_prev
@@ -2079,7 +2362,7 @@ module crosscov
 				C′ωm_arr[mode_ind] =  Cω_interp_fn(ω + m*Ω_rot)
 				
 			end
-			return tasks_on_proc,C′ωm_arr
+			return modes_on_proc,C′ωm_arr
 		end
 
 		futures = [@spawnat p interpolate_over_mω(rank) for (rank,p) in enumerate(workers())]
@@ -2102,23 +2385,23 @@ module crosscov
 
 	#######################################################################################################################
 
-	function δCt_uniform_rotation_rotatedwaves(x1::Point3D,x2::Point3D;Ω_rot = 20e2/Rsun,τ_ind_arr = nothing)
-		C′_t = Cτ_rotating(x1,x2,Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr)
+	function δCt_uniform_rotation_rotatedwaves(x1::Point3D,x2::Point3D;Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,ℓ_range=nothing,r_src=Rsun-75e5)
+		C′_t = Cτ_rotating(x1,x2,Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,ℓ_range=ℓ_range,r_src=r_src)
 		τ_ind_arr = axes(C′_t,1)
-		C0_t = Ct(x1,x2)[τ_ind_arr]
+		C0_t = Ct(x1,x2,ℓ_range=ℓ_range,r_src=r_src)[τ_ind_arr]
 		return C′_t .- C0_t
 	end
 
-	δCt_uniform_rotation_rotatedwaves(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,Ω_rot= 20e2/Rsun,τ_ind_arr=nothing) = δCt_uniform_rotation_rotatedwaves(Point3D(r_obs,n1),Point3D(r_obs,n2),τ_ind_arr=τ_ind_arr,Ω_rot=Ω_rot)
-	δCt_uniform_rotation_rotatedwaves(Δϕ::Real;r_obs=Rsun-75e5,Ω_rot= 20e2/Rsun,τ_ind_arr=nothing) = δCt_uniform_rotation_rotatedwaves(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),τ_ind_arr=τ_ind_arr,Ω_rot=Ω_rot)
+	δCt_uniform_rotation_rotatedwaves(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot= 20e2/Rsun,τ_ind_arr=nothing,ℓ_range=nothing) = δCt_uniform_rotation_rotatedwaves(Point3D(r_obs,n1),Point3D(r_obs,n2),τ_ind_arr=τ_ind_arr,Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
+	δCt_uniform_rotation_rotatedwaves(Δϕ::Real;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot= 20e2/Rsun,τ_ind_arr=nothing,ℓ_range=nothing) = δCt_uniform_rotation_rotatedwaves(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),τ_ind_arr=τ_ind_arr,Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
 
-	function δCt_uniform_rotation_rotatedwaves_linearapprox(x1::Point3D,x2::Point3D;Ω_rot = 20e2/Rsun,τ_ind_arr = nothing)
+	function δCt_uniform_rotation_rotatedwaves_linearapprox(x1::Point3D,x2::Point3D;Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,ℓ_range=ℓ_range,r_src=Rsun-75e5)
 		Gfn_path = Gfn_path_from_source_radius(x1)
 		@load "$Gfn_path/parameters.jld2" Nt dt
 		
 		t = (0:Nt-1).*dt
 		
-		δCt = -Ω_rot .* t .* ∂ϕ₂Ct(x1,x2)
+		δCt = -Ω_rot .* t .* ∂ϕ₂Ct(x1,x2,ℓ_range=ℓ_range,r_src=r_src)
 		if !isnothing(τ_ind_arr)
 			return δCt[τ_ind_arr]
 		else
@@ -2126,8 +2409,8 @@ module crosscov
 		end
 	end	
 
-	δCt_uniform_rotation_rotatedwaves_linearapprox(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,Ω_rot = 20e2/Rsun,τ_ind_arr = nothing) = δCt_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,n1),Point3D(r_obs,n2);Ω_rot = Ω_rot,τ_ind_arr = τ_ind_arr)
-	δCt_uniform_rotation_rotatedwaves_linearapprox(Δϕ::Real;r_obs=Rsun-75e5,Ω_rot = 20e2/Rsun,τ_ind_arr = nothing) = δCt_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ);Ω_rot = Ω_rot,τ_ind_arr = τ_ind_arr)
+	δCt_uniform_rotation_rotatedwaves_linearapprox(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,ℓ_range=nothing) = δCt_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,n1),Point3D(r_obs,n2);Ω_rot = Ω_rot,τ_ind_arr = τ_ind_arr,ℓ_range=ℓ_range,r_src=r_src)
+	δCt_uniform_rotation_rotatedwaves_linearapprox(Δϕ::Real;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,ℓ_range=nothing) = δCt_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ);Ω_rot = Ω_rot,τ_ind_arr = τ_ind_arr,ℓ_range=ℓ_range,r_src=r_src)
 
 	########################################################################################################################
 
@@ -2159,23 +2442,22 @@ module crosscov
 		return τ_low,τ_high
 	end
 
-	function h(x1::Point3D,x2::Point3D;plots=false,bounce_no=1)
+	function h(x1::Point3D,x2::Point3D;plots=false,bounce_no=1,ℓ_range=nothing,r_src=Rsun-75e5)
 
-		Gfn_path = Gfn_path_from_source_radius(x1)
-		@load joinpath(Gfn_path,"parameters.jld2") ν_full ν_start_zeros ν_arr Nt dt dν
+		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
+		@load joinpath(Gfn_path_x1,"parameters.jld2") ν_full ν_start_zeros ν_arr Nt dt dν
 
 		ω_full = 2π.*ν_full
 
-		Cω_x1x2 = Cω(x1,x2)
+		Cω_x1x2 = Cω(x1,x2,ℓ_range=ℓ_range,r_src=r_src)
 
 		C_t = brfft(Cω_x1x2,Nt).*dν
 
 		env = abs.(hilbert(C_t))[1:div(Nt,2)] # first half for positive shifts
 
-		# get the time of first bounce arrival
+		# get the time of first bounce arrival in seconds
 		τ_low,τ_high = bounce_filter(acos(cosχ(x1,x2)),bounce_no)
 		τ_low_ind = Int(floor(τ_low/dt)); τ_high_ind = Int(ceil(τ_high/dt))
-
 
 		# fit a gaussian to obtain the correct bounce
 		peak_center = argmax(env[τ_low_ind:τ_high_ind]) + τ_low_ind - 1
@@ -2228,15 +2510,18 @@ module crosscov
 			plt.tight_layout()
 		end
 		
-
 		return (t_inds_range=t_inds_range,f_t=f_t,h_t=h_t,h_ω=h_ω)
 
 	end
 
-	h(n1::Point2D,n2::Point2D,r_obs::Real=Rsun-75e5;plots=false,bounce_no=1) = h(Point3D(r_obs,n1),Point3D(r_obs,n2),plots=plots,bounce_no=bounce_no)
-	h(Δϕ::Real,r_obs::Real=Rsun-75e5;plots=false,bounce_no=1) = h(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),plots=plots,bounce_no=bounce_no)
+	h(n1::Point2D,n2::Point2D,r_obs::Real=Rsun-75e5;plots=false,bounce_no=1,ℓ_range=nothing,r_src=Rsun-75e5) = h(Point3D(r_obs,n1),Point3D(r_obs,n2),plots=plots,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src)
+	h(Δϕ::Real,r_obs::Real=Rsun-75e5;plots=false,bounce_no=1,ℓ_range=nothing,r_src=Rsun-75e5) = h(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),plots=plots,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src)
 
 end
+
+#################################################################
+# Kernels and travel times
+#################################################################
 
 module kernel
 
@@ -2248,59 +2533,95 @@ module kernel
 	# Validation for uniform rotation
 	################################################################################################################
 
-	function kernel_uniform_rotation_uplus(n1::Point2D,n2::Point2D,r_obs=Rsun-75e5;ℓ_range=nothing,bounce_no=1)
-		Gfn_path = Gfn_path_from_source_radius(r_obs)
-		@load joinpath(Gfn_path,"parameters.jld2") ν_arr ℓ_arr num_procs dν ν_start_zeros
+	function kernel_uniform_rotation_uplus(x1::Point3D,x2::Point3D;ℓ_range=nothing,bounce_no=1,r_src=Rsun-75e5)
+		
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
+		Gfn_path_x2 = Gfn_path_from_source_radius(x2)
+
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs dν ν_start_zeros
 
 		if isnothing(ℓ_range)
 			ℓ_range = ℓ_arr
 		else
-			ℓ_range = max(ℓ_range[1],ℓ_arr[1]):min(ℓ_range[end],ℓ_arr[end])
+			ℓ_range = intersect(ℓ_range,ℓ_arr)
 		end
 
 		Nν_Gfn = length(ν_arr)
 
-		h_ω_arr = h(n1,n2,r_obs,bounce_no=bounce_no).h_ω[ν_start_zeros .+ (1:Nν_Gfn)] # only in range
+		h_ω_arr = h(x1,x2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src).h_ω[ν_start_zeros .+ (1:Nν_Gfn)] # only in range
 
-		r_obs_ind = argmin(abs.(r .- r_obs))
+		r₁_ind = argmin(abs.(r .- x1.r))
+		r₂_ind = argmin(abs.(r .- x2.r))
 
 		dω = dν*2π		
 
 		function kernel_uniform_rotation_uplus_somemodes(rank)
 		
-			ℓ_ωind_iter_on_proc = collect(split_product_across_processors(ℓ_arr,1:Nν_Gfn,nworkers(),rank))
+			ℓ_ωind_iter_on_proc = collect(split_product_across_processors(ℓ_range,1:Nν_Gfn,nworkers(),rank))
 			proc_id_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 
-			∂ϕ₂Pl_cosχ = dPl(cosχ(n1,n2),ℓmax=ℓ_arr[end]).*∂ϕ₂cosχ(n1,n2)
+			∂ϕ₂Pl_cosχ = dPl(cosχ(x1,x2),ℓmax=ℓ_arr[end]).*∂ϕ₂cosχ(x1,x2)
 
 			K = zeros(ComplexF64,nr)
 
+			δG_r₁_rsrc = zeros(ComplexF64,nr)
+			δG_r₂_rsrc = zeros(ComplexF64,nr)
+
 			for proc_id in proc_id_range
-				G_proc_file = joinpath(Gfn_path,@sprintf "Gfn_proc_%03d.fits" proc_id)
-				file = FITS(G_proc_file,"r")
+
+				Gsrc_file = FITS(joinpath(Gfn_path_src,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
+				Gobs1_file = FITS(joinpath(Gfn_path_x1,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
+				Gobs2_file = FITS(joinpath(Gfn_path_x2,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
 
 				# Get a list of (ℓ,ω) in this file
-				tasks_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
+				modes_in_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
 
-				for (ℓ,ω_ind) in intersect(ℓ_ωind_iter_on_proc,tasks_file)
+				for (ℓ,ω_ind) in intersect(ℓ_ωind_iter_on_proc,modes_in_file)
 
-					mode_index = get_index_in_split_array(tasks_file,(ℓ,ω_ind))
+					mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
+
+					ω = 2π*ν_arr[ω_ind]
 		    		
-		    		G = read(file[1],:,:,1:2,1,mode_index)
-		    		G0 = G[:,1,1] + im*G[:,2,1]
-		    		G1 = G[:,1,2] + im*G[:,2,2]
+		    		G = read(Gsrc_file[1],:,:,1:2,1,mode_index)
+		    		Gsrc_0 = G[:,1,1] + im*G[:,2,1]
+		    		Gsrc_1 = G[:,1,2] + im*G[:,2,2]
+		    		G_r₁_rsrc = Gsrc_0[r₁_ind]
+		    		G_r₂_rsrc = Gsrc_0[r₂_ind]
 
-		    		ω = 2π*ν_arr[ω_ind]
-				    
-				    K .+= @. dω/2π * ω^3 * Powspec(ω) * (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * imag(h_ω_arr[ω_ind]) * real(
-				    				conj(G0[r_obs_ind])*(G0^2 -  2G0*G1/Ω(ℓ,0) + G1^2*(ℓ*(ℓ+1)-1)/Ω(ℓ,0)^2)) 
+		    		G = read(Gobs1_file[1],:,:,1:2,1,mode_index)
+		    		Gobs1_0 = G[:,1,1] + im*G[:,2,1]
+		    		Gobs1_1 = G[:,1,2] + im*G[:,2,2]
+
+		    		@. δG_r₁_rsrc = Gsrc_0 * Gobs1_0 - Gsrc_0 * Gobs1_1/Ω(ℓ,0) - Gsrc_1 * Gobs1_0/Ω(ℓ,0) +
+				    								 (ℓ*(ℓ+1)-1) * Gsrc_1 * Gobs1_1/Ω(ℓ,0)^2
+
+				    Gobs1_0 = nothing; Gobs1_1 = nothing;
+
+				    if r₁_ind != r₂_ind
+
+			    		G = read(Gobs2_file[1],:,:,1:2,1,mode_index)
+			    		Gobs2_0 = G[:,1,1] + im*G[:,2,1]
+			    		Gobs2_1 = G[:,1,2] + im*G[:,2,2]
+
+			    		@. δG_r₂_rsrc = Gsrc_0 * Gobs2_0 - Gsrc_0 * Gobs2_1/Ω(ℓ,0) - Gsrc_1 * Gobs2_0/Ω(ℓ,0) +
+					    								 (ℓ*(ℓ+1)-1) * Gsrc_1 * Gobs2_1/Ω(ℓ,0)^2
+
+					    Gobs2_0 = nothing; Gobs2_1 = nothing;
+					     @. K +=  dω/2π * ω^3 * Powspec(ω) * (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * imag(h_ω_arr[ω_ind]) * (conj(δG_r₁_rsrc)*G_r₂_rsrc + conj(G_r₁_rsrc)*δG_r₂_rsrc) 
+					else
+						 @. K +=  dω/2π * ω^3 * Powspec(ω) * (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * imag(h_ω_arr[ω_ind]) * 2real(conj(δG_r₁_rsrc)*G_r₁_rsrc)
+					end
+
 				end
 
-				close(file)
+				close(Gsrc_file)
+				close(Gobs1_file)
+				close(Gobs2_file)
 				
 			end
 
-			return 8*√(3/4π)*im .* K .* r .* ρ
+			return 4*√(3/4π)*im .* K .* r .* ρ
 		end
 
 		kernel_futures = [@spawnat p kernel_uniform_rotation_uplus_somemodes(rank) for (rank,p) in enumerate(workers_active(ℓ_arr,1:Nν_Gfn))]
@@ -2310,18 +2631,22 @@ module kernel
 		return K
 	end
 
-	function δτ_uniform_rotation_firstborn_int_K_u(n1::Point2D,n2::Point2D,r_obs=Rsun-75e5;Ω_rot=20e2/Rsun,bounce_no=1)
-		K₊ = kernel_uniform_rotation_uplus(n1,n2,r_obs,bounce_no=bounce_no)
+	kernel_uniform_rotation_uplus(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing,bounce_no=1) = kernel_uniform_rotation_uplus(Point3D(r_obs,n1),Point3D(r_obs,n2),r_src=r_src.ℓ_range=ℓ_range,bounce_no=bounce_no)
+
+	function δτ_uniform_rotation_firstborn_int_K_u(x1::Point3D,x2::Point3D;ℓ_range=nothing,Ω_rot=20e2/Rsun,bounce_no=1,r_src=Rsun-75e5)
+		K₊ = kernel_uniform_rotation_uplus(x1,x2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src)
 		u⁺ = @. √(4π/3)*im*Ω_rot*r
 
 		δτ = real(integrate.simps(K₊.*u⁺,x=r))
 	end
 
-	function δτ_uniform_rotation_firstborn_int_hω_δCω(n1::Point2D,n2::Point2D,r_obs=Rsun-75e5;Ω_rot=20e2/Rsun,bounce_no=1)
+	δτ_uniform_rotation_firstborn_int_K_u(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing,Ω_rot=20e2/Rsun,bounce_no=1) = δτ_uniform_rotation_firstborn_int_K_u(Point3D(r_obs,n1),Point3D(r_obs,n2),r_src=r_src,ℓ_range=ℓ_range,bounce_no=bounce_no,Ω_rot=Ω_rot)
+
+	function δτ_uniform_rotation_firstborn_int_hω_δCω(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot=20e2/Rsun,bounce_no=1,ℓ_range=nothing)
 		Gfn_path = Gfn_path_from_source_radius(r_obs)
 		@load joinpath(Gfn_path,"parameters.jld2") ν_arr dν ν_start_zeros dt
 
-		h_ω_arr = h(n1,n2,r_obs,bounce_no=bounce_no).h_ω[ν_start_zeros .+ (1:length(ν_arr))] # only in range
+		h_ω_arr = h(n1,n2,r_obs,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src).h_ω[ν_start_zeros .+ (1:length(ν_arr))] # only in range
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
 
@@ -2331,7 +2656,7 @@ module kernel
 
 		δτ = zero(Float64)
 
-		δC = δCω_uniform_rotation_firstborn_integrated_over_angle(n1,n2,r_obs=r_obs,Ω_rot=Ω_rot)
+		δC = δCω_uniform_rotation_firstborn_integrated_over_angle(n1,n2,r_obs=r_obs,r_src=r_src,Ω_rot=Ω_rot,ℓ_range=ℓ_range)
 
 		for (hω,δCω) in zip(h_ω_arr,δC)
 			δτ += dω/2π * 2real(conj(hω)*δCω)
@@ -2340,14 +2665,14 @@ module kernel
 		return δτ
 	end	
 
-	function δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1::Point2D,n2::Point2D,r_obs=Rsun-75e5;Ω_rot=20e2/Rsun,bounce_no=1)
+	function δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot=20e2/Rsun,bounce_no=1,ℓ_range=nothing)
 		Gfn_path = Gfn_path_from_source_radius(r_obs)
 		@load joinpath(Gfn_path,"parameters.jld2") ν_arr dν ν_start_zeros
 
 		Nν_Gfn = length(ν_arr)
 		ν_Gfn_ind_range = ν_start_zeros .+ (1:Nν_Gfn)
 
-		h_ω_arr = h(n1,n2,r_obs,bounce_no=bounce_no).h_ω[ν_Gfn_ind_range] # only in range
+		h_ω_arr = h(n1,n2,r_obs,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src).h_ω[ν_Gfn_ind_range] # only in range
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
 
@@ -2355,7 +2680,7 @@ module kernel
 
 		δτ = zero(Float64)
 
-		δC = δCω_uniform_rotation_rotatedwaves_linearapprox(n1,n2,r_obs=r_obs,Ω_rot=Ω_rot)[ν_Gfn_ind_range]
+		δC = δCω_uniform_rotation_rotatedwaves_linearapprox(n1,n2,r_obs=r_obs,r_src=r_src,Ω_rot=Ω_rot,ℓ_range=ℓ_range)[ν_Gfn_ind_range]
 
 		for (hω,δCω) in zip(h_ω_arr,δC)
 			δτ += dω/2π * 2real(conj(hω)*δCω)
@@ -2364,30 +2689,48 @@ module kernel
 		return δτ
 	end
 
-	function δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1::Point2D,n2::Point2D;Ω_rot=20e2/Rsun,r_obs=Rsun-75e5,bounce_no=1)
+	function δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot=20e2/Rsun,bounce_no=1,ℓ_range=nothing)
 		Gfn_path = Gfn_path_from_source_radius(r_obs)
 		@load joinpath(Gfn_path,"parameters.jld2") dt
 
-		h_arr = h(n1,n2,r_obs,bounce_no=bounce_no)
+		h_arr = h(n1,n2,r_obs,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src)
 		h_t = h_arr.h_t
 		τ_ind_arr = h_arr.t_inds_range
 
-		δC_t = δCt_uniform_rotation_rotatedwaves(n1,n2;Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,r_obs=r_obs)
+		δC_t = δCt_uniform_rotation_rotatedwaves(n1,n2;Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,r_obs=r_obs,r_src=r_src,ℓ_range=ℓ_range)
 
 		δτ = integrate.simps(h_t[τ_ind_arr].*δC_t.parent,dx=dt)
 	end
 
-	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2::Point2D;Ω_rot=20e2/Rsun,r_obs=Rsun-75e5,bounce_no=1)
+	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot=20e2/Rsun,bounce_no=1,ℓ_range=nothing)
 		Gfn_path = Gfn_path_from_source_radius(r_obs)
 		@load joinpath(Gfn_path,"parameters.jld2") dt
 
-		h_arr = h(n1,n2,r_obs,bounce_no=bounce_no)
+		h_arr = h(n1,n2,r_obs,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src)
 		h_t = h_arr.h_t
 		τ_ind_arr = h_arr.t_inds_range
 
-		δC_t = δCt_uniform_rotation_rotatedwaves_linearapprox(n1,n2;Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,r_obs=r_obs)
+		δC_t = δCt_uniform_rotation_rotatedwaves_linearapprox(n1,n2;Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,r_obs=r_obs,ℓ_range=ℓ_range,r_src=r_src)
 
 		δτ = integrate.simps(h_t[τ_ind_arr].*δC_t,dx=dt)
+	end
+
+	function traveltimes_validate(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,ℓ_range=nothing,bounce_no=1,Ω_rot=20e2/Rsun)
+
+		δτ1 = δτ_uniform_rotation_firstborn_int_K_u(n1,n2,r_obs=r_obs,ℓ_range=ℓ_range,bounce_no=bounce_no,Ω_rot=Ω_rot)
+		@printf "%-50s %g\n" "First Born, ∫dr u(r) K(r)" round(δτ1,sigdigits=3)
+
+		δτ2 = δτ_uniform_rotation_firstborn_int_hω_δCω(n1,n2,r_obs=r_obs,ℓ_range=ℓ_range,bounce_no=bounce_no,Ω_rot=Ω_rot)
+		@printf "%-50s %g\n" "First Born, ∫dω/2π h(ω) δC_FB(ω)" round(δτ2,sigdigits=3)
+
+		δτ3 = δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1,n2,r_obs=r_obs,ℓ_range=ℓ_range,bounce_no=bounce_no,Ω_rot=Ω_rot)
+		@printf "%-50s %g\n" "Rotated frame, ∫dω/2π h(ω) δC_R_lin(ω)" round(δτ3,sigdigits=3)
+
+		δτ4 = δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1,n2,r_obs=r_obs,ℓ_range=ℓ_range,bounce_no=bounce_no,Ω_rot=Ω_rot)
+		@printf "%-50s %g\n" "Rotated frame, ∫dt h(t) δC_R(t)" round(δτ4,sigdigits=3)
+
+		δτ5 = δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1,n2,r_obs=r_obs,ℓ_range=ℓ_range,bounce_no=bounce_no,Ω_rot=Ω_rot)
+		@printf "%-50s %g\n" "Rotated frame, ∫dt h(t) δC_R_lin(t)" round(δτ5,sigdigits=3)
 	end
 
 	################################################################################################################
