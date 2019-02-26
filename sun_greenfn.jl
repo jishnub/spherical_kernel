@@ -1613,22 +1613,6 @@ module crosscov
 		return Cω_arr
 	end
 
-	Cω(n1::Point2D,n2::Point2D;r_obs::Real=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing) = Cω(Point3D(r_obs,n1),Point3D(r_obs,n2),ℓ_range=ℓ_range,ν_ind_range=ν_ind_range,r_src=r_src)
-	Cω(Δϕ::Real;r_obs::Real=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing) = Cω(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ℓ_range=ℓ_range,ν_ind_range=ν_ind_range,r_src=r_src)
-
-	function Cω(x1::Point3D,x2::Point3D,ν::Real;r_src=Rsun-75e5,ℓ_range=nothing)
-		
-		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ν_start_zeros
-
-		ν_test_ind = argmin(abs.(ν_arr .- ν))
-
-		Cω(x1,x2,ℓ_range=ℓ_range,ν_ind_range=ν_test_ind:ν_test_ind,r_src=r_src)[ν_start_zeros + ν_test_ind]
-	end
-
-	Cω(n1::Point2D,n2::Point2D,ν::Real;r_obs::Real=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = Cω(Point3D(r_obs,n1),Point3D(r_obs,n2),ν,ℓ_range=ℓ_range,r_src=r_src)
-	Cω(Δϕ::Real,ν::Real;r_obs::Real=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = Cω(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ν,ℓ_range=ℓ_range,r_src=r_src)
-
 	########################################################################################################
 	# Line-of-sight projected cross-covariance
 	########################################################################################################
@@ -1732,6 +1716,30 @@ module crosscov
 	end
 
 	########################################################################################################
+	# Add methods
+	########################################################################################################
+
+	for fn in (:Cω,:Cω_los)
+		@eval $fn(n1::Point2D,n2::Point2D;r_obs::Real=Rsun-75e5,kwargs...) = $fn(Point3D(r_obs,n1),Point3D(r_obs,n2);kwargs...)
+		@eval $fn(Δϕ::Real;r_obs::Real=Rsun-75e5,kwargs...) = $fn(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ);kwargs...)
+		@eval $fn(n1::Point2D,n2::Point2D,ν::Real;r_obs::Real=Rsun-75e5,kwargs...) = $fn(Point3D(r_obs,n1),Point3D(r_obs,n2),ν;kwargs...)
+		@eval $fn(Δϕ::Real,ν::Real;r_obs::Real=Rsun-75e5,kwargs...) = $fn(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ν;kwargs...)
+		
+		C_single_freq = quote
+			function $fn(x1::Point3D,x2::Point3D,ν::Real;r_src=Rsun-75e5,kwargs...)
+			
+				Gfn_path_src = Gfn_path_from_source_radius(r_src)
+				@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ν_start_zeros
+
+				ν_test_ind = argmin(abs.(ν_arr .- ν))
+
+				$fn(x1,x2,ν_ind_range=ν_test_ind:ν_test_ind;kwargs...)[ν_start_zeros + ν_test_ind]
+			end
+		end
+		eval(C_single_freq)
+	end
+
+	########################################################################################################
 	# Spectrum of C(ℓ,ω) at one frequency
 	########################################################################################################	
 
@@ -1814,8 +1822,8 @@ module crosscov
 		Cν_ℓ = sum(Cω_summodes(rank) for (rank,p) in enumerate(workers_active(ℓ_range,ν_test_ind:ν_test_ind)) ) 
 	end
 
-	Cω_onefreq_ℓspectrum(n1::Point2D,n2::Point2D,ν=3e-3;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = Cω_onefreq_ℓspectrum(Point3D(r_obs,n1),Point3D(r_obs,n2),ℓ_range=ℓ_range,r_src=r_src)
-	Cω_onefreq_ℓspectrum(Δϕ::Real,ν=3e-3;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = Cω_onefreq_ℓspectrum(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ℓ_range=ℓ_range,r_src=r_src)
+	Cω_onefreq_ℓspectrum(n1::Point2D,n2::Point2D,ν=3e-3;r_obs=Rsun-75e5,kwargs...) = Cω_onefreq_ℓspectrum(Point3D(r_obs,n1),Point3D(r_obs,n2);kwargs...)
+	Cω_onefreq_ℓspectrum(Δϕ::Real,ν=3e-3;r_obs=Rsun-75e5,kwargs...) = Cω_onefreq_ℓspectrum(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ);kwargs...)
 
 	########################################################################################################
 	# Derivatives of cross-covariance
@@ -1908,40 +1916,31 @@ module crosscov
 		return Cω_arr
 	end
 
-	∂ϕ₂Cω(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing) = ∂ϕ₂Cω(Point3D(r_obs,n1),Point3D(r_obs,n2),ℓ_range=ℓ_range,ν_ind_range=ν_ind_range,r_src=r_src)
-	∂ϕ₂Cω(Δϕ::Real;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing) = ∂ϕ₂Cω(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ℓ_range=ℓ_range,ν_ind_range=ν_ind_range,r_src=r_src)
-
 	########################################################################################################
 	# Time-domain cross-covariance
 	########################################################################################################
 
-	function Ct(x1::Point3D,x2::Point3D;ℓ_range=nothing,r_src=Rsun-75e5)
+	function Ct(x1::Point3D,x2::Point3D;r_src=Rsun-75e5,kwargs...)
 		
-		Gfn_path = Gfn_path_from_source_radius(x1)
-		@load joinpath(Gfn_path,"parameters.jld2") dν
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dν
 
-		C = Cω(x1,x2,ℓ_range=ℓ_range,r_src=r_src)
+		C = Cω(x1,x2;kwargs...)
 		Nω = length(C)
 		Nt = 2*(Nω -1)
 		brfft(C,Nt) .* dν
 	end
 
-	Ct(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = Ct(Point3D(r_obs,n1),Point3D(r_obs,n2),ℓ_range=ℓ_range,r_src=r_src)
-	Ct(Δϕ::Real;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = Ct(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ℓ_range=ℓ_range,r_src=r_src)
-
-	function ∂ϕ₂Ct(x1::Point3D,x2::Point3D;ℓ_range=nothing,r_src=Rsun-75e5)
+	function ∂ϕ₂Ct(x1::Point3D,x2::Point3D;r_src=Rsun-75e5,kwargs...)
 		
-		Gfn_path = Gfn_path_from_source_radius(x1)
-		@load joinpath(Gfn_path,"parameters.jld2") dν
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dν
 
-		C = ∂ϕ₂Cω(x1,x2,ℓ_range=ℓ_range,r_src=r_src)
+		C = ∂ϕ₂Cω(x1,x2;kwargs...)
 		Nω = length(C)
 		Nt = 2*(Nω -1)
 		brfft(C,Nt) .*dν
 	end
-
-	∂ϕ₂Ct(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = ∂ϕ₂Ct(Point3D(r_obs,n1),Point3D(r_obs,n2);ℓ_range=ℓ_range,r_src=r_src)
-	∂ϕ₂Ct(Δϕ::Real;r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing) = ∂ϕ₂Ct(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ);ℓ_range=ℓ_range,r_src=r_src)
 
 	########################################################################################################
 	# Cross-covariance at all distances on the equator, essentially the time-distance diagram
@@ -2043,12 +2042,12 @@ module crosscov
 		return Cϕω_arr
 	end
 
-	function CΔϕt(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;ℓ_range=nothing,r_src=Rsun-75e5) 
+	function CΔϕt(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;r_src=Rsun-75e5,kwargs...) 
 
-		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
-		@load joinpath(Gfn_path_x1,"parameters.jld2") dν
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dν
 
-		C = CΔϕω(r₁,r₂,ℓ_range=ℓ_range,r_src=r_src)
+		C = CΔϕω(r₁,r₂,r_src=r_src;kwargs...)
 		Nω = length(C)
 		Nt = 2*(Nω - 1)
 	
@@ -2084,11 +2083,6 @@ module crosscov
 
 		return Cτ_arr
 	end
-
-	Cτ_rotating(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,ℓ_range=nothing) = Cτ_rotating(Point3D(r_obs,n1),Point3D(r_obs,n2),Ω_rot = Ω_rot,τ_ind_arr = τ_ind_arr,r_src=r_src)
-	Cτ_rotating(Δϕ::Real;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,ℓ_range=nothing) = Cτ_rotating(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),Ω_rot = Ω_rot,τ_ind_arr = τ_ind_arr,ℓ_range=ℓ_range,r_src=r_src)
-
-	
 
 	#######################################################################################################################################
 
@@ -2205,14 +2199,6 @@ module crosscov
 		δC = sum(fetch.(futures))
 
 		return -2im*Ω_rot*ω^3*Powspec(ω)*δC
-	end
-
-	function δCω_uniform_rotation_firstborn_integrated_over_angle(Δϕ::Real,ν::Real;Ω_rot = 20e2/Rsun,r_obs = Rsun - 75e5,r_src=Rsun-75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_firstborn_integrated_over_angle(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ν,Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
-	end
-
-	function δCω_uniform_rotation_firstborn_integrated_over_angle(n1::Point2D,n2::Point2D,ν::Real;Ω_rot = 20e2/Rsun,r_obs = Rsun - 75e5,r_src=Rsun-75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_firstborn_integrated_over_angle(Point3D(r_obs,n1),Point3D(r_obs,n2),ν,Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
 	end
 
 	function δCω_uniform_rotation_firstborn_integrated_over_angle(x1::Point3D,x2::Point3D;Ω_rot = 20e2/Rsun,ℓ_range=nothing,r_src=Rsun-75e5)
@@ -2339,14 +2325,6 @@ module crosscov
 		return @. -2im*Ω_rot*δC
 	end
 
-	function δCω_uniform_rotation_firstborn_integrated_over_angle(Δϕ::Real;Ω_rot = 20e2/Rsun,r_obs = Rsun - 75e5,r_src=Rsun-75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_firstborn_integrated_over_angle(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
-	end
-
-	function δCω_uniform_rotation_firstborn_integrated_over_angle(n1::Point2D,n2::Point2D;Ω_rot = 20e2/Rsun,r_obs = Rsun - 75e5,r_src=Rsun-75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_firstborn_integrated_over_angle(Point3D(r_obs,n1),Point3D(r_obs,n2),Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
-	end
-
 	########################################################################################################################################
 
 
@@ -2380,14 +2358,6 @@ module crosscov
 		return -im*Ω_rot*∂ω∂ϕC[ν_match_index]
 	end
 
-	function δCω_uniform_rotation_rotatedwaves_linearapprox(Δϕ::Real,ν::Real;Ω_rot= 20e2/Rsun,r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,π/3),ν,Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
-	end
-
-	function δCω_uniform_rotation_rotatedwaves_linearapprox(n1::Point2D,n2::Point2D,ν::Real;Ω_rot= 20e2/Rsun,r_obs=Rsun-75e5,r_src=Rsun-75e5,ℓ_range=nothing)
-		δCω_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,n1),Point3D(r_obs,n2),ν,Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
-	end
-
 	function δCω_uniform_rotation_rotatedwaves_linearapprox(x1::Point3D,x2::Point3D;Ω_rot= 20e2/Rsun,ℓ_range=nothing,r_src=Rsun-75e5)
 		
 		# We compute δC(x1,x2) = -iΩ ∑ℓ (2ℓ+1)/4π ∂ω (ω^2 P(ω) αℓω*(r₂)αℓω(r₁))∂Δϕ Pl(cos(Δϕ))
@@ -2410,14 +2380,7 @@ module crosscov
 		return @. -im*Ω_rot*∂ω∂ϕC
 	end
 
-	function δCω_uniform_rotation_rotatedwaves_linearapprox(n1::Point2D,n2::Point2D;Ω_rot= 20e2/Rsun,r_obs=Rsun-75e5,ℓ_range=nothing,r_src=Rsun-75e5)
-		δCω_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,n1),Point3D(r_obs,n2),Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
-	end
-
-	function δCω_uniform_rotation_rotatedwaves_linearapprox(Δϕ::Real;Ω_rot= 20e2/Rsun,r_obs=Rsun-75e5,ℓ_range=nothing,r_src=Rsun-75e5)
-		δCω_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,π/3),Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
-	end
-
+	# INCOMPLETE!
 	function δCω_uniform_rotation_rotatedwaves(Δϕ::Real,ν=3e-3;Ω_rot= 20e2/Rsun,ℓ_range=nothing,r_src=Rsun-75e5)
 		# We compute δC(Δϕ,ω) = C′(Δϕ,ω) -  C(Δϕ,ω)
 		C′(Δϕ,ω) = ifft(C(m,ω+mΩ),1)
@@ -2494,9 +2457,6 @@ module crosscov
 		return C′_t .- C0_t
 	end
 
-	δCt_uniform_rotation_rotatedwaves(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot= 20e2/Rsun,τ_ind_arr=nothing,ℓ_range=nothing) = δCt_uniform_rotation_rotatedwaves(Point3D(r_obs,n1),Point3D(r_obs,n2),τ_ind_arr=τ_ind_arr,Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
-	δCt_uniform_rotation_rotatedwaves(Δϕ::Real;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot= 20e2/Rsun,τ_ind_arr=nothing,ℓ_range=nothing) = δCt_uniform_rotation_rotatedwaves(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),τ_ind_arr=τ_ind_arr,Ω_rot=Ω_rot,ℓ_range=ℓ_range,r_src=r_src)
-
 	function δCt_uniform_rotation_rotatedwaves_linearapprox(x1::Point3D,x2::Point3D;Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,ℓ_range=ℓ_range,r_src=Rsun-75e5)
 		Gfn_path = Gfn_path_from_source_radius(x1)
 		@load "$Gfn_path/parameters.jld2" Nt dt
@@ -2510,9 +2470,6 @@ module crosscov
 			return δCt
 		end
 	end	
-
-	δCt_uniform_rotation_rotatedwaves_linearapprox(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,ℓ_range=nothing) = δCt_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,n1),Point3D(r_obs,n2);Ω_rot = Ω_rot,τ_ind_arr = τ_ind_arr,ℓ_range=ℓ_range,r_src=r_src)
-	δCt_uniform_rotation_rotatedwaves_linearapprox(Δϕ::Real;r_obs=Rsun-75e5,r_src=Rsun-75e5,Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,ℓ_range=nothing) = δCt_uniform_rotation_rotatedwaves_linearapprox(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ);Ω_rot = Ω_rot,τ_ind_arr = τ_ind_arr,ℓ_range=ℓ_range,r_src=r_src)
 
 	########################################################################################################################
 
@@ -2616,8 +2573,18 @@ module crosscov
 
 	end
 
-	h(n1::Point2D,n2::Point2D,r_obs::Real=Rsun-75e5;plots=false,bounce_no=1,ℓ_range=nothing,r_src=Rsun-75e5) = h(Point3D(r_obs,n1),Point3D(r_obs,n2),plots=plots,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src)
-	h(Δϕ::Real,r_obs::Real=Rsun-75e5;plots=false,bounce_no=1,ℓ_range=nothing,r_src=Rsun-75e5) = h(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),plots=plots,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src)
+	##########################################################################################################################
+	# Add methods for computing cross-covariances in 2D (same obs radii) and 1D (same obs radii and on the equator)
+	##########################################################################################################################
+
+	for fn in (:∂ϕ₂Cω,:∂ϕ₂Ct,:Ct,:Cτ_rotating,
+		:δCω_uniform_rotation_firstborn_integrated_over_angle,:δCω_uniform_rotation_firstborn_integrated_over_angle,
+		:δCω_uniform_rotation_rotatedwaves_linearapprox,:δCω_uniform_rotation_rotatedwaves_linearapprox,
+		:δCt_uniform_rotation_rotatedwaves,:δCt_uniform_rotation_rotatedwaves_linearapprox,:h)
+
+		@eval $fn(n1::Point2D,n2::Point2D;r_obs::Real=Rsun-75e5,kwargs...) = $fn(Point3D(r_obs,n1),Point3D(r_obs,n2);kwargs...)
+		@eval $fn(Δϕ::Real;r_obs::Real=Rsun-75e5,kwargs...) = $fn(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ);kwargs...)
+	end
 
 end
 
@@ -2868,13 +2835,11 @@ module kernel
 		end
 	end
 
-	function δτ_uniform_rotation_firstborn_int_hω_δCω(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
-		Gfn_path = Gfn_path_from_source_radius(r_obs)
-		@load joinpath(Gfn_path,"parameters.jld2") ν_arr dν ν_start_zeros dt
+	function δτ_uniform_rotation_firstborn_int_hω_δCω(n1::Point2D,n2::Point2D;r_src=Rsun-75e5,Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr dν ν_start_zeros
 
-		h_ω_arr = h(n1,n2,r_obs;bounce_no=bounce_no,kwargs...).h_ω[ν_start_zeros .+ (1:length(ν_arr))] # only in range
-
-		r_obs_ind = argmin(abs.(r .- r_obs))
+		h_ω_arr = h(n1,n2;bounce_no=bounce_no,kwargs...).h_ω[ν_start_zeros .+ (1:length(ν_arr))] # only in range
 
 		dω = dν*2π
 
@@ -2882,7 +2847,7 @@ module kernel
 
 		δτ = zero(Float64)
 
-		δC = δCω_uniform_rotation_firstborn_integrated_over_angle(n1,n2,r_obs=r_obs,Ω_rot=Ω_rot;kwargs...)
+		δC = δCω_uniform_rotation_firstborn_integrated_over_angle(n1,n2;Ω_rot=Ω_rot,kwargs...)
 
 		for (hω,δCω) in zip(h_ω_arr,δC)
 			δτ += dω/2π * 2real(conj(hω)*δCω)
@@ -2891,22 +2856,20 @@ module kernel
 		return δτ
 	end	
 
-	function δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
-		Gfn_path = Gfn_path_from_source_radius(r_obs)
-		@load joinpath(Gfn_path,"parameters.jld2") ν_arr dν ν_start_zeros
+	function δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1::Point2D,n2::Point2D;r_src=Rsun-75e5,Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr dν ν_start_zeros
 
 		Nν_Gfn = length(ν_arr)
 		ν_Gfn_ind_range = ν_start_zeros .+ (1:Nν_Gfn)
 
-		h_ω_arr = h(n1,n2,r_obs;bounce_no=bounce_no,kwargs...).h_ω[ν_Gfn_ind_range] # only in range
-
-		r_obs_ind = argmin(abs.(r .- r_obs))
+		h_ω_arr = h(n1,n2;bounce_no=bounce_no,kwargs...).h_ω[ν_Gfn_ind_range] # only in range
 
 		dω = dν*2π
 
 		δτ = zero(Float64)
 
-		δC = δCω_uniform_rotation_rotatedwaves_linearapprox(n1,n2;r_obs=r_obs,Ω_rot=Ω_rot,kwargs...)[ν_Gfn_ind_range]
+		δC = δCω_uniform_rotation_rotatedwaves_linearapprox(n1,n2;Ω_rot=Ω_rot,kwargs...)[ν_Gfn_ind_range]
 
 		for (hω,δCω) in zip(h_ω_arr,δC)
 			δτ += dω/2π * 2real(conj(hω)*δCω)
@@ -2915,28 +2878,28 @@ module kernel
 		return δτ
 	end
 
-	function δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
-		Gfn_path = Gfn_path_from_source_radius(r_obs)
-		@load joinpath(Gfn_path,"parameters.jld2") dt
+	function δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1::Point2D,n2::Point2D;r_src=Rsun-75e5,Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dt
 
-		h_arr = h(n1,n2,r_obs,bounce_no=bounce_no;kwargs...)
+		h_arr = h(n1,n2;bounce_no=bounce_no,kwargs...)
 		h_t = h_arr.h_t
 		τ_ind_arr = h_arr.t_inds_range
 
-		δC_t = δCt_uniform_rotation_rotatedwaves(n1,n2;Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,r_obs=r_obs,kwargs...)
+		δC_t = δCt_uniform_rotation_rotatedwaves(n1,n2;Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,kwargs...)
 
 		δτ = integrate.simps(h_t[τ_ind_arr].*δC_t.parent,dx=dt)
 	end
 
-	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2::Point2D;r_obs=Rsun-75e5,Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
-		Gfn_path = Gfn_path_from_source_radius(r_obs)
-		@load joinpath(Gfn_path,"parameters.jld2") dt
+	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2::Point2D;r_src=Rsun-75e5,Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dt
 
-		h_arr = h(n1,n2,r_obs;bounce_no=bounce_no,kwargs...)
+		h_arr = h(n1,n2;bounce_no=bounce_no,kwargs...)
 		h_t = h_arr.h_t
 		τ_ind_arr = h_arr.t_inds_range
 
-		δC_t = δCt_uniform_rotation_rotatedwaves_linearapprox(n1,n2;Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,r_obs=r_obs,kwargs...)
+		δC_t = δCt_uniform_rotation_rotatedwaves_linearapprox(n1,n2;Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,kwargs...)
 
 		δτ = integrate.simps(h_t[τ_ind_arr].*δC_t,dx=dt)
 	end
