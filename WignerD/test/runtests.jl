@@ -25,17 +25,17 @@ end
 end
 
 @testset "Clebsch-Gordan" begin
-	@test WignerD.CG_tzero(1,1,1)[0] ≈ WignerD.clebschgordan(1,1,1,-1,0,0) ≈ 1/√3
-	@test WignerD.CG_tzero(1,1,1)[1] ≈ WignerD.clebschgordan(1,1,1,-1,1,0) ≈ 1/√2
-	@test WignerD.CG_tzero(1,1,1)[2] ≈ WignerD.clebschgordan(1,1,1,-1,2,0) ≈ 1/√6
+	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,1)[0] ≈ WignerD.clebschgordan(1,1,1,-1,0,0) ≈ 1/√3
+	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,1)[1] ≈ WignerD.clebschgordan(1,1,1,-1,1,0) ≈ 1/√2
+	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,1)[2] ≈ WignerD.clebschgordan(1,1,1,-1,2,0) ≈ 1/√6
 
-	@test WignerD.CG_tzero(1,1,-1)[0] ≈ WignerD.clebschgordan(1,-1,1,1,0,0) ≈ 1/√3
-	@test WignerD.CG_tzero(1,1,-1)[1] ≈ WignerD.clebschgordan(1,-1,1,1,1,0) ≈ -1/√2
-	@test WignerD.CG_tzero(1,1,-1)[2] ≈ WignerD.clebschgordan(1,-1,1,1,2,0) ≈ 1/√6
+	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,-1)[0] ≈ WignerD.clebschgordan(1,-1,1,1,0,0) ≈ 1/√3
+	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,-1)[1] ≈ WignerD.clebschgordan(1,-1,1,1,1,0) ≈ -1/√2
+	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,-1)[2] ≈ WignerD.clebschgordan(1,-1,1,1,2,0) ≈ 1/√6
 
-	@test WignerD.CG_tzero(1,1,0)[0] ≈ WignerD.clebschgordan(1,0,1,0,0,0) ≈ -1/√3
-	@test WignerD.CG_tzero(1,1,0)[1] ≈ WignerD.clebschgordan(1,0,1,0,1,0) ≈ 0
-	@test WignerD.CG_tzero(1,1,0)[2] ≈ WignerD.clebschgordan(1,0,1,0,2,0) ≈ √(2/3)
+	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,0)[0] ≈ WignerD.clebschgordan(1,0,1,0,0,0) ≈ -1/√3
+	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,0)[1] ≈ WignerD.clebschgordan(1,0,1,0,1,0) ≈ 0
+	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,0)[2] ≈ WignerD.clebschgordan(1,0,1,0,2,0) ≈ √(2/3)
 end
 
 @testset "Ylm0" begin
@@ -82,11 +82,14 @@ end
 		Yℓℓ_10[ℓ] = dP[ℓ]*im*(-1)^ℓ * √(3*(2ℓ+1)/(ℓ*(ℓ+1)))/4π * ∂ϕ₂cosχ(n1,n2)
 	end
 	
-	YB_10 = OffsetArray{ComplexF64}(undef,1:ℓmax)
-	for ℓ in axes(YB_10,1)
-		YB_10[ℓ] = BiPoSH_s0(ℓ,ℓ,1,0,0,n1,n2)[1,0,0]
+	YB_10_n1n2 = OffsetArray{ComplexF64}(undef,1:ℓmax)
+	YB_10_n2n1 = OffsetArray{ComplexF64}(undef,1:ℓmax)
+	for ℓ in 1:ℓmax
+		YB_10_n1n2[ℓ] = BiPoSH_s0(ℓ,ℓ,1,0,0,n1,n2)[1]
+		YB_10_n2n1[ℓ] = BiPoSH_s0(ℓ,ℓ,1,0,0,n2,n1)[1]
 	end
 	
-	@test Yℓℓ_10 ≈ YB_10
+	@test Yℓℓ_10 ≈ YB_10_n1n2
+	@test YB_10_n1n2 ≈ -YB_10_n2n1
 	
 end

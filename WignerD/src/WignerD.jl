@@ -90,7 +90,7 @@ djmatrix(j,m,n,θ) = djmatrix(j,θ,m_range=m:m,n_range=n:n)
 
 
 Ylmatrix(l,m,n,(θ,ϕ)::Tuple{<:Real,<:Real}) = Ylmatrix(l,(θ,ϕ),m_range=m:m,n_range=n:n)
-Ylmatrix(l,m,n,n1::Point2D) = Ylmatrix(l,(n1.θ,n1.ϕ),m_range=m:m,n_range=n:n)
+Ylmatrix(l,m,n,n1::SphericalPoint) = Ylmatrix(l,(n1.θ,n1.ϕ),m_range=m:m,n_range=n:n)
 
 function Ylmatrix(l,(θ,ϕ)::Tuple{<:Real,<:Real};m_range=-l:l,n_range=-1:1)
 
@@ -104,7 +104,7 @@ function Ylmatrix(l,(θ,ϕ)::Tuple{<:Real,<:Real};m_range=-l:l,n_range=-1:1)
 	return Y
 end
 
-Ylmatrix(l,n::Point2D;m_range=-l:l,n_range=-1:1) = Ylmatrix(l,(n.θ,n.ϕ);m_range=m_range,n_range=n_range)
+Ylmatrix(l,n::SphericalPoint;m_range=-l:l,n_range=-1:1) = Ylmatrix(l,(n.θ,n.ϕ);m_range=m_range,n_range=n_range)
 
 X(j,n) = sqrt((j+n)*(j-n+1))
 
@@ -167,7 +167,7 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,
 	end
 
 	for m in -m_max:m_max
-		C_ℓ₁m_ℓ₂minusm_s0 = CG_tzero(ℓ₁,ℓ₂,m;wig3j_fn_ptr=wig3j_fn_ptr)
+		C_ℓ₁m_ℓ₂minusm_s0 = CG_ℓ₁mℓ₂minms0(ℓ₁,ℓ₂,m;wig3j_fn_ptr=wig3j_fn_ptr)
 
 		s_intersection = intersect(axes(Y_BSH,1),axes(C_ℓ₁m_ℓ₂minusm_s0,1))
 		
@@ -217,7 +217,7 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:R
 	end
 
 	for m in -m_max:m_max
-		C_ℓ₁m_ℓ₂minusm_s0 = CG_tzero(ℓ₁,ℓ₂,m;wig3j_fn_ptr=wig3j_fn_ptr)
+		C_ℓ₁m_ℓ₂minusm_s0 = CG_ℓ₁mℓ₂minms0(ℓ₁,ℓ₂,m;wig3j_fn_ptr=wig3j_fn_ptr)
 
 		s_intersection = intersect(axes(Y_BSH,1),axes(C_ℓ₁m_ℓ₂minusm_s0,1))
 
@@ -233,8 +233,8 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:R
 	return Y_BSH
 end
 
-BiPoSH_s0(ℓ₁,ℓ₂,s,β::Integer,γ::Integer,n1::Point2D,n2::Point2D) = BiPoSH_s0(ℓ₁,ℓ₂,s,β,γ,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
-BiPoSH_s0(ℓ₁,ℓ₂,s,n1::Point2D,n2::Point2D) = BiPoSH_s0(ℓ₁,ℓ₂,s,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
+BiPoSH_s0(ℓ₁,ℓ₂,s,β::Integer,γ::Integer,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH_s0(ℓ₁,ℓ₂,s,β,γ,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
+BiPoSH_s0(ℓ₁,ℓ₂,s,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH_s0(ℓ₁,ℓ₂,s,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
 
 function Wigner3j(j2,j3,m2,m3;wig3j_fn_ptr=nothing)
 	
@@ -312,7 +312,7 @@ function Wigner3j!(w3j,j2,j3,m2,m3;wig3j_fn_ptr=nothing)
 	end
 end
 
-function CG_tzero(ℓ₁,ℓ₂,m;wig3j_fn_ptr=nothing)
+function CG_ℓ₁mℓ₂minms0(ℓ₁,ℓ₂,m;wig3j_fn_ptr=nothing)
 	smin = abs(ℓ₁-ℓ₂)
 	smax = ℓ₁ + ℓ₂
 	w = Wigner3j(ℓ₁,ℓ₂,m,-m;wig3j_fn_ptr=wig3j_fn_ptr)
@@ -326,3 +326,4 @@ end
 export Ylmn,Ylmatrix,djmn,djmatrix,BiPoSH_s0
 
 end
+
