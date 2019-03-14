@@ -25,17 +25,17 @@ end
 end
 
 @testset "Clebsch-Gordan" begin
-	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,1)[0] ≈ WignerD.clebschgordan(1,1,1,-1,0,0) ≈ 1/√3
-	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,1)[1] ≈ WignerD.clebschgordan(1,1,1,-1,1,0) ≈ 1/√2
-	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,1)[2] ≈ WignerD.clebschgordan(1,1,1,-1,2,0) ≈ 1/√6
+	@test WignerD.CG_ℓ₁mℓ₂nst(1,1,1)[0] ≈ WignerD.clebschgordan(1,1,1,-1,0,0) ≈ 1/√3
+	@test WignerD.CG_ℓ₁mℓ₂nst(1,1,1)[1] ≈ WignerD.clebschgordan(1,1,1,-1,1,0) ≈ 1/√2
+	@test WignerD.CG_ℓ₁mℓ₂nst(1,1,1)[2] ≈ WignerD.clebschgordan(1,1,1,-1,2,0) ≈ 1/√6
 
-	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,-1)[0] ≈ WignerD.clebschgordan(1,-1,1,1,0,0) ≈ 1/√3
-	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,-1)[1] ≈ WignerD.clebschgordan(1,-1,1,1,1,0) ≈ -1/√2
-	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,-1)[2] ≈ WignerD.clebschgordan(1,-1,1,1,2,0) ≈ 1/√6
+	@test WignerD.CG_ℓ₁mℓ₂nst(1,-1,1)[0] ≈ WignerD.clebschgordan(1,-1,1,1,0,0) ≈ 1/√3
+	@test WignerD.CG_ℓ₁mℓ₂nst(1,-1,1)[1] ≈ WignerD.clebschgordan(1,-1,1,1,1,0) ≈ -1/√2
+	@test WignerD.CG_ℓ₁mℓ₂nst(1,-1,1)[2] ≈ WignerD.clebschgordan(1,-1,1,1,2,0) ≈ 1/√6
 
-	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,0)[0] ≈ WignerD.clebschgordan(1,0,1,0,0,0) ≈ -1/√3
-	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,0)[1] ≈ WignerD.clebschgordan(1,0,1,0,1,0) ≈ 0
-	@test WignerD.CG_ℓ₁mℓ₂minms0(1,1,0)[2] ≈ WignerD.clebschgordan(1,0,1,0,2,0) ≈ √(2/3)
+	@test WignerD.CG_ℓ₁mℓ₂nst(1,0,1)[0] ≈ WignerD.clebschgordan(1,0,1,0,0,0) ≈ -1/√3
+	@test WignerD.CG_ℓ₁mℓ₂nst(1,0,1)[1] ≈ WignerD.clebschgordan(1,0,1,0,1,0) ≈ 0
+	@test WignerD.CG_ℓ₁mℓ₂nst(1,0,1)[2] ≈ WignerD.clebschgordan(1,0,1,0,2,0) ≈ √(2/3)
 end
 
 @testset "Ylm0" begin

@@ -131,6 +131,9 @@ function coeffi(j)
 end
 
 
+##################################################################################################
+
+# Only t=0
 function BiPoSH_s0(ℓ₁,ℓ₂,s::Integer,β::Integer,γ::Integer,(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real})
 	# only t=0
 	Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁),n_range=β:β)
@@ -167,12 +170,12 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,
 	end
 
 	for m in -m_max:m_max
-		C_ℓ₁m_ℓ₂minusm_s0 = CG_ℓ₁mℓ₂minms0(ℓ₁,ℓ₂,m;wig3j_fn_ptr=wig3j_fn_ptr)
+		CG = CG_ℓ₁mℓ₂nst(ℓ₁,m,ℓ₂;wig3j_fn_ptr=wig3j_fn_ptr)
 
-		s_intersection = intersect(axes(Y_BSH,1),axes(C_ℓ₁m_ℓ₂minusm_s0,1))
+		s_intersection = intersect(axes(Y_BSH,1),axes(CG,1))
 		
 		for s in s_intersection
-			Y_BSH[s,β,γ] += C_ℓ₁m_ℓ₂minusm_s0[s]*Y_ℓ₁[m,β]*Y_ℓ₂[-m,γ]
+			Y_BSH[s,β,γ] += CG[s]*Y_ℓ₁[m,β]*Y_ℓ₂[-m,γ]
 		end
 	end
 
@@ -217,12 +220,12 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:R
 	end
 
 	for m in -m_max:m_max
-		C_ℓ₁m_ℓ₂minusm_s0 = CG_ℓ₁mℓ₂minms0(ℓ₁,ℓ₂,m;wig3j_fn_ptr=wig3j_fn_ptr)
+		CG = CG_ℓ₁mℓ₂nst(ℓ₁,m,ℓ₂;wig3j_fn_ptr=wig3j_fn_ptr)
 
-		s_intersection = intersect(axes(Y_BSH,1),axes(C_ℓ₁m_ℓ₂minusm_s0,1))
+		s_intersection = intersect(axes(Y_BSH,1),axes(CG,1))
 
 		for (s,β,γ) in Iterators.product(s_intersection,axes(Y_BSH)[2:3]...)
-			Y_BSH[s,β,γ] += C_ℓ₁m_ℓ₂minusm_s0[s]*Y_ℓ₁[m,β]*Y_ℓ₂[-m,γ]
+			Y_BSH[s,β,γ] += CG[s]*Y_ℓ₁[m,β]*Y_ℓ₂[-m,γ]
 		end
 	end
 
@@ -236,10 +239,166 @@ end
 BiPoSH_s0(ℓ₁,ℓ₂,s,β::Integer,γ::Integer,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH_s0(ℓ₁,ℓ₂,s,β,γ,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
 BiPoSH_s0(ℓ₁,ℓ₂,s,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH_s0(ℓ₁,ℓ₂,s,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
 
+
+# Any t
+
+struct BSH
+	smin :: Int64
+	smax :: Int64
+	arr :: OffsetArray{ComplexF64}
+end
+
+function BSH(smin::Integer,smax::Integer,args...) 
+	Y = BSH(smin,smax,zeros(ComplexF64,1:((smax+1)^2-smin^2),args...))
+	return Y
+end
+
+BSH(s_range::UnitRange{<:Integer},args...) = BSH(first(s_range),last(s_range),
+												zeros(ComplexF64,
+												1:((last(s_range)+1)^2-first(s_range)^2),args...))
+
+onedindex(s,t,smin=0) = s^2 - smin^2+(t+s)+1
+onedindex(a::BSH,s,t) = onedindex(s,t,a.smin)
+
+Base.getindex(a::BSH,s,t,args...) = a.arr[onedindex(a,s,t),args...]
+Base.setindex!(a::BSH,x,s,t,args...) = a.arr[onedindex(a,s,t),args...] = x
+
+Base.fill!(a::BSH,x) = fill!(a.arr,x)
+
+function BiPoSH(ℓ₁,ℓ₂,s::Integer,t::Integer,β::Integer,γ::Integer,
+	(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real})
+
+	Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁),n_range=β:β)
+	Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂),n_range=γ:γ)
+	@assert(δ(ℓ₁,ℓ₂,s),"|ℓ₁-ℓ₂|<=s<=ℓ₁+ℓ₂ not satisfied")
+	@assert(abs(t)<=s,"abs(t)<=s not satisfied")
+
+	# Y_BSH = OffsetArray{ComplexF64}(undef,s:s,t:t,β:β,γ:γ)
+	Y_BSH = BSH(s:s,β:β,γ:γ)
+
+	for m in -ℓ₁:ℓ₁
+		n = t - m
+		if abs(n) > ℓ₂
+			continue
+		end
+		Y_BSH[s,t,β,γ] += clebschgordan(ℓ₁,m,ℓ₂,n,s,t)*Y_ℓ₁[m,β]*Y_ℓ₂[n,γ]
+	end
+
+	return OffsetArray(reshape([Y_BSH[s,t,β,γ]],1,1,1,1),s:s,t:t,β:β,γ:γ)
+end
+
+function BiPoSH(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,
+	(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real};wig3j_fn_ptr=nothing)
+	
+	Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁),n_range=β:β)
+	Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂),n_range=γ:γ)
+	
+	s_valid = abs(ℓ₁-ℓ₂):ℓ₁+ℓ₂
+	s_intersection = intersect(s_range,s_valid)
+
+	Y_BSH = BSH(s_intersection,β:β,γ:γ)
+	t_max = Y_BSH.smax
+
+	lib = nothing
+
+	if isnothing(wig3j_fn_ptr)
+		lib=Libdl.dlopen(joinpath(dirname(pathof(WignerD)),"shtools_wrapper.so"))
+		wig3j_fn_ptr=Libdl.dlsym(lib,:wigner3j_wrapper)
+	end
+
+	for t=-t_max:t_max,m in -ℓ₁:ℓ₁
+		n = t - m
+		if abs(n) > ℓ₂
+			continue
+		end
+		CG = CG_ℓ₁mℓ₂nst(ℓ₁,m,ℓ₂,t;wig3j_fn_ptr=wig3j_fn_ptr)
+
+		s_intersection = intersect(axes(Y_BSH,1),axes(CG,1))
+		
+		for s in s_intersection
+			Y_BSH[s,t,β,γ] += CG[s]*Y_ℓ₁[m,β]*Y_ℓ₂[n,γ]
+		end
+	end
+
+	if !isnothing(lib)
+		Libdl.dlclose(lib)
+	end
+
+	return Y_BSH
+end
+
+function BiPoSH(ℓ₁,ℓ₂,s::Integer,t::Integer,(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real})
+	
+	Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁))
+	Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂))
+	@assert(δ(ℓ₁,ℓ₂,s),"|ℓ₁-ℓ₂|<=s<=ℓ₁+ℓ₂ not satisfied")
+	@assert(abs(t)<=s,"abs(t)<=s not satisfied")
+
+	# Y_BSH = OffsetArray(zeros(ComplexF64,1,3,3),s:s,-1:1,-1:1)
+	Y_BSH = BSH(s:s,-1:1,-1:1)
+
+	for β=-1:1,γ=-1:1
+		for m in -ℓ₁:ℓ₁
+			n = t - m
+			if abs(n)>ℓ₂
+				continue
+			end
+			Y_BSH[s,t,β,γ] += clebschgordan(ℓ₁,m,ℓ₂,n,s,t)*Y_ℓ₁[m,β]*Y_ℓ₂[n,γ]
+		end
+	end
+
+	return OffsetArray(reshape([Y_BSH[s,t,β,γ]],1,1,1,1),s:s,t:t,β:β,γ:γ)
+end
+
+function BiPoSH(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real};wig3j_fn_ptr=nothing)
+	Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁))
+	Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂))
+
+	s_valid = abs(ℓ₁-ℓ₂):ℓ₁+ℓ₂
+	s_valid = intersect(s_valid,s_range)
+
+	Y_BSH = BSH(s_valid,-1:1,-1:1)
+	t_max = Y_BSH.smax
+
+	lib = nothing
+
+	if isnothing(wig3j_fn_ptr)
+		lib=Libdl.dlopen(joinpath(dirname(pathof(WignerD)),"shtools_wrapper.so"))
+		wig3j_fn_ptr=Libdl.dlsym(lib,:wigner3j_wrapper)
+	end
+
+	for β in -1:1, γ in -1:1, t in -t_max:t_max, m in -ℓ₁:ℓ₁
+		
+		n = t - m
+		if abs(n) > ℓ₂
+			continue
+		end
+		CG = CG_ℓ₁mℓ₂nst(ℓ₁,m,ℓ₂,t;wig3j_fn_ptr=wig3j_fn_ptr)
+
+		for s in intersect(s_valid,axes(CG,1))
+			Y_BSH[s,t,β,γ] += CG[s]*Y_ℓ₁[m,β]*Y_ℓ₂[n,γ]
+		end
+	end
+
+	if !isnothing(lib)
+		Libdl.dlclose(lib)
+	end
+
+	return Y_BSH
+end
+
+BiPoSH(ℓ₁,ℓ₂,s,t,β::Integer,γ::Integer,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH(ℓ₁,ℓ₂,s,t,β,γ,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
+BiPoSH(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH(ℓ₁,ℓ₂,s_range,β,γ,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
+BiPoSH(ℓ₁,ℓ₂,s,t,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH(ℓ₁,ℓ₂,s,t,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
+BiPoSH(ℓ₁,ℓ₂,s_range::AbstractRange,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH(ℓ₁,ℓ₂,s_range,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
+
+
+##################################################################################################
+
 function Wigner3j(j2,j3,m2,m3;wig3j_fn_ptr=nothing)
 	
 	m2,m3 = Int32(m2),Int32(m3)
-	m1 = Int32(m2 + m3)
+	m1 = Int32(-(m2 + m3))
 
 	j2,j3 = Int32(j2),Int32(j3)
 	len = Int32(j2+j3+1)
@@ -278,7 +437,7 @@ end
 function Wigner3j!(w3j,j2,j3,m2,m3;wig3j_fn_ptr=nothing)
 	
 	m2,m3 = Int32(m2),Int32(m3)
-	m1 = Int32(m2 + m3)
+	m1 = Int32(-(m2 + m3))
 
 	j2,j3 = Int32(j2),Int32(j3)
 	len = Int32(j2+j3+1)
@@ -312,10 +471,11 @@ function Wigner3j!(w3j,j2,j3,m2,m3;wig3j_fn_ptr=nothing)
 	end
 end
 
-function CG_ℓ₁mℓ₂minms0(ℓ₁,ℓ₂,m;wig3j_fn_ptr=nothing)
-	smin = abs(ℓ₁-ℓ₂)
+function CG_ℓ₁mℓ₂nst(ℓ₁,m,ℓ₂,t=0;wig3j_fn_ptr=nothing)
+	n = t-m
+	smin = max(abs(ℓ₁-ℓ₂),abs(t))
 	smax = ℓ₁ + ℓ₂
-	w = Wigner3j(ℓ₁,ℓ₂,m,-m;wig3j_fn_ptr=wig3j_fn_ptr)
+	w = Wigner3j(ℓ₁,ℓ₂,m,n;wig3j_fn_ptr=wig3j_fn_ptr)
 	CG = OffsetArray(w[1:(smax-smin+1)],smin:smax)
 	for s in axes(CG,1)
 		CG[s] *= √(2s+1)*(-1)^(ℓ₁-ℓ₂)
@@ -323,7 +483,7 @@ function CG_ℓ₁mℓ₂minms0(ℓ₁,ℓ₂,m;wig3j_fn_ptr=nothing)
 	return CG
 end
 
-export Ylmn,Ylmatrix,djmn,djmatrix,BiPoSH_s0
+export Ylmn,Ylmatrix,djmn,djmatrix,BiPoSH_s0,BiPoSH,BSH
 
 end
 
