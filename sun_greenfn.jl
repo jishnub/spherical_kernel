@@ -523,11 +523,6 @@ module Greenfn_radial
 		return M_ωℓ
 	end
 
-	# struct Gfn
-	# 	mode :: NamedTuple{(:ω, :ω_ind, :ℓ),Tuple{Float64,Int64,Int64}}
-	# 	G :: OffsetArray{ComplexF64,3,Array{ComplexF64,3}}
-	# end
-
 	function compute_radial_component_of_Gfn_onemode(ω,ℓ;r_src=Rsun-75e5,tangential=false)
 
 		# Solar model
@@ -659,7 +654,8 @@ module Greenfn_radial
 		dν = ν_full[2] - ν_full[1]; T=1/dν; dt = T/Nt;
 		ν_start_zeros = count(ν_full .< ν_low)
 		ν_end_zeros = count(ν_high .< ν_full)
-		println("$(length(ν_arr)) frequencies over $(@sprintf "%.1e" ν_arr[1]) to $(@sprintf "%.1e" ν_arr[end])")
+		Nν_Gfn = length(ν_arr)
+		println("$(Nν_Gfn) frequencies over $(@sprintf "%.1e" ν_arr[1]) to $(@sprintf "%.1e" ν_arr[end])")
 
 		ω_arr = 2π .* ν_arr;
 
@@ -689,28 +685,31 @@ module Greenfn_radial
 			file = FITS(save_path,"w")
 
 			# save real and imaginary parts separately 
-			G = OffsetArray(zeros(nr,2,2,1,length(ℓ_ω_proc)),0,0,-1,-1,0)
+			# indices are r,re-im,α,β,dorder,ℓω
+			G = zeros(nr,2,0:1,0:0,0:1,length(ℓ_ω_proc))
 
 			Dr = dbydr(dr) # derivative operator
-			T2 = (N2./g .+ Dr*log.(r.^2 .*ρ) )
+			# T2 = (N2./g .+ Dr*log.(r.^2 .*ρ) )
 
 			for (ind,(ℓ,ω_ind)) in enumerate(ℓ_ω_proc)
 				
 				ω = ω_arr[ω_ind]
+				# need only the radial-source components if line-of-sight is ignored
 				αr,βr, = compute_radial_component_of_Gfn_onemode(ω,ℓ,tangential=false);
 
-				@. G[:,1,0,0,ind] = real(αr)
-				@. G[:,2,0,0,ind] = imag(αr)
-				@. G[:,1,1,0,ind] = real(Ω(ℓ,0) * βr/(ρ*r*ω^2))
-				@. G[:,2,1,0,ind] = imag(Ω(ℓ,0) * βr/(ρ*r*ω^2))
-				
+				# radial component for radial source
+				@. G[:,1,0,0,0,ind] = real(αr)
+				@. G[:,2,0,0,0,ind] = imag(αr)
+				G[:,1,0,0,1,ind] .= Dr*G[:,1,0,0,0,ind]
+				G[:,2,0,0,1,ind] .= Dr*G[:,2,0,0,0,ind]
+				# tangential component for radial source
+				@. G[:,1,1,0,0,ind] = real(Ω(ℓ,0) * βr/(ρ*r*ω^2))
+				@. G[:,2,1,0,0,ind] = imag(Ω(ℓ,0) * βr/(ρ*r*ω^2))
+				G[:,1,1,0,1,ind] .= Dr*G[:,1,1,0,0,ind]
+				G[:,2,1,0,1,ind] .= Dr*G[:,2,1,0,0,ind]
 			end
 
 			write(file,G.parent)
-
-			# modes_ℓ,modes_ω_ind = collect.(zip(ℓ_ω_proc...))
-
-			# write(file,Dict("mode_l"=>modes_ℓ,"mode_omega_ind"=>modes_ω_ind))
 
 			close(file)
 			return rank
@@ -723,7 +722,7 @@ module Greenfn_radial
 			println("$(length(fetch.(f))) jobs finished")
 		end
 
-		@save joinpath(Gfn_save_directory,"parameters.jld2") ν_arr ℓ_arr num_procs ν_full dν ν_start_zeros ν_end_zeros Nν Nt dt ν_nyquist T
+		@save joinpath(Gfn_save_directory,"parameters.jld2") Nν_Gfn ν_arr ℓ_arr num_procs ν_full dν ν_start_zeros ν_end_zeros Nν Nt dt ν_nyquist T
 	end
 
 	export compute_Greenfn_radial_components_allmodes_parallel,Gfn,Gfn_path_from_source_radius,Ω
@@ -1452,6 +1451,7 @@ module crosscov
 	export δCω_uniform_rotation_firstborn_integrated_over_angle
 	export δCω_uniform_rotation_rotatedwaves_linearapprox
 	export δCω_uniform_rotation_rotatedwaves,δCt_uniform_rotation_rotatedwaves,δCt_uniform_rotation_rotatedwaves_linearapprox
+	export intersect_fallback
 
 	Gfn_path_from_source_radius(x::Point3D) = Gfn_path_from_source_radius(x.r)
 
@@ -1472,25 +1472,21 @@ module crosscov
 
 	#######################################################################################################
 
+	intersect_fallback(arr::Nothing,default) = default
+	intersect_fallback(arr,default) = intersect(arr,default)
+
+	#######################################################################################################
+
 	# Check if all modes are being covered in parallel
 
-	function parallel_check(;r_obs=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing)
-		Gfn_path = Gfn_path_from_source_radius(r_obs)
+	function parallel_check(;r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing)
+		Gfn_path = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path,"parameters.jld2") ν_arr ℓ_arr num_procs
 
 		Nν_Gfn = length(ν_arr)
 
-		if isnothing(ℓ_range)
-			ℓ_range = ℓ_arr
-		else
-			ℓ_range = intersect(ℓ_arr,ℓ_range)
-		end
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(1:Nν_Gfn,ν_ind_range)
-		end
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
 		modes_checked = OffsetArray{Bool}(undef,ℓ_range,ν_ind_range)
 		fill!(modes_checked,false)
@@ -1530,27 +1526,18 @@ module crosscov
 		return all(modes_checked)
 	end
 
+
 	#######################################################################################################
 
 	function Cω(x1::Point3D,x2::Point3D;r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing)
 		
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs Nν ν_start_zeros
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs Nν ν_start_zeros dν
 
 		Cω_arr = zeros(ComplexF64,Nν)
-		Nν_Gfn = length(ν_arr)
 
-		if isnothing(ℓ_range)
-			ℓ_range = ℓ_arr
-		else
-			ℓ_range = intersect(ℓ_arr,ℓ_range)
-		end
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(ν_ind_range,1:Nν_Gfn)
-		end
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
 		function Cω_summodes(rank)
 
@@ -1562,7 +1549,7 @@ module crosscov
 			ν_ind_max = last(modes_on_proc)[2]
 			Nν_on_proc = ν_ind_max - ν_ind_min + 1
 
-			Cω_proc = OffsetArray(zeros(ComplexF64,Nν_on_proc),ν_ind_min:ν_ind_max)
+			Cω_proc = zeros(ComplexF64,ν_ind_min:ν_ind_max)
 
 			Pl_cosχ = Pl(cosχ(x1,x2),ℓmax=ℓ_arr[end])
 
@@ -1580,18 +1567,15 @@ module crosscov
 
 		    		mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
-		    		@assert(!isnothing(mode_index),"mode index $mode_index for ($ℓ,$ω_ind) not found by splitting across processors")
+		    		ω = 2π*dν*(ν_start_zeros + ω_ind)
 
-		    		ω = ν_arr[ω_ind]*2π
-
-		    		G = read(Gsrc_file[1],r₁_ind,:,1,1,mode_index)
+		    		G = read(Gsrc_file[1],r₁_ind,:,1,1,1,mode_index)
 		    		α_r₁ = G[1] + im*G[2]
-
 
 					if r₁_ind == r₂_ind
 		    			α_r₂ = α_r₁
 		    		else
-						G = read(Gsrc_file[1],r₂_ind,:,1,1,mode_index)
+						G = read(Gsrc_file[1],r₂_ind,:,1,1,1,mode_index)
 			    		α_r₂ = G[1] + im*G[2]
 		    		end
 
@@ -1608,36 +1592,27 @@ module crosscov
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
-		futures = [@spawnat p Cω_summodes(rank) for (rank,p) in enumerate(procs)]
 
-		for f in futures
-			Ci = fetch(f)
-			ax = axes(Ci,1)
-			@. Cω_arr[ax + ν_start_zeros] += Ci.parent
+		@sync for (rank,p) in enumerate(procs)
+			@async begin
+				Ci = remotecall_fetch(Cω_summodes,p,rank)
+				ax = axes(Ci,1)
+				@. Cω_arr[ax + ν_start_zeros] += Ci.parent
+			end
 		end
 
 		return Cω_arr
 	end
 
-	function Cω(x1::Point3D,x2_arr::Vector{Point3D};r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing)
+	function Cω(x1::Point3D,x2_arr::Vector{<:Point3D};r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing)
 		
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs Nν ν_start_zeros
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs Nν ν_start_zeros dν
 
 		Cω_arr = zeros(ComplexF64,length(x2_arr),Nν)
-		Nν_Gfn = length(ν_arr)
 
-		if isnothing(ℓ_range)
-			ℓ_range = ℓ_arr
-		else
-			ℓ_range = intersect(ℓ_arr,ℓ_range)
-		end
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(ν_ind_range,1:Nν_Gfn)
-		end
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
 		function Cω_summodes(rank)
 
@@ -1673,7 +1648,7 @@ module crosscov
 
 		    		@assert(!isnothing(mode_index),"mode index $mode_index for ($ℓ,$ω_ind) not found by splitting across processors")
 
-		    		ω = ν_arr[ω_ind]*2π
+		    		ω = 2π*dν*(ν_start_zeros + ω_ind)
 
 		    		G = read(Gsrc_file[1],r₁_ind,:,1,1,mode_index)
 		    		α_r₁ = G[1] + im*G[2]
@@ -1702,36 +1677,27 @@ module crosscov
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
-		futures = [@spawnat p Cω_summodes(rank) for (rank,p) in enumerate(procs)]
 
-		for f in futures
-			Ci = fetch(f)
-			ax = axes(Ci,2)
-			@. Cω_arr[:,ax + ν_start_zeros] += Ci.parent
+		@sync for (rank,p) in enumerate(procs)
+			@async begin
+				Ci = remotecall_fetch(Cω_summodes,p,rank)
+				ax = axes(Ci,2)
+				@. Cω_arr[:,ax + ν_start_zeros] += Ci.parent
+			end
 		end
 
 		return copy(transpose(Cω_arr))
 	end
 
-	function Cω(n1::Point2D,n2_arr::Vector{Point2D};r_src=Rsun-75e5,r_obs=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing)
+	function Cω(n1::Point2D,n2_arr::Vector{<:Point2D};r_src=Rsun-75e5,r_obs=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing)
 		
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs Nν ν_start_zeros
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs Nν ν_start_zeros dν
 
 		Cω_arr = zeros(ComplexF64,length(n2_arr),Nν)
-		Nν_Gfn = length(ν_arr)
 
-		if isnothing(ℓ_range)
-			ℓ_range = ℓ_arr
-		else
-			ℓ_range = intersect(ℓ_arr,ℓ_range)
-		end
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(ν_ind_range,1:Nν_Gfn)
-		end
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
 		function Cω_summodes(rank)
 
@@ -1752,7 +1718,7 @@ module crosscov
 
 			Pl_cosχ = copy(transpose(Pl_cosχ))
 
-			robs_ind = argmin(abs.(r .- r_obs))
+			r_obs_ind = argmin(abs.(r .- r_obs))
 
 			for proc_id in proc_range
 
@@ -1767,9 +1733,9 @@ module crosscov
 
 		    		@assert(!isnothing(mode_index),"mode index $mode_index for ($ℓ,$ω_ind) not found by splitting across processors")
 
-		    		ω = ν_arr[ω_ind]*2π
+		    		ω = 2π*dν*(ν_start_zeros + ω_ind)
 
-		    		G = read(Gsrc_file[1],robs_ind,:,1,1,mode_index)
+		    		G = read(Gsrc_file[1],r_obs_ind,:,1,1,mode_index)
 		    		abs_α_robs² = G[1]^2 + G[2]^2
 
 		    		for n2ind in 1:length(n2_arr)
@@ -1787,12 +1753,13 @@ module crosscov
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
-		futures = [@spawnat p Cω_summodes(rank) for (rank,p) in enumerate(procs)]
 
-		for f in futures
-			Ci = fetch(f)
-			ax = axes(Ci,2)
-			@. Cω_arr[:,ax + ν_start_zeros] += Ci.parent
+		@sync for (rank,p) in enumerate(procs)
+			@async begin
+				Ci = remotecall_fetch(Cω_summodes,p,rank)
+				ax = axes(Ci,2)
+				@. Cω_arr[:,ax + ν_start_zeros] += Ci.parent
+			end
 		end
 
 		return copy(transpose(Cω_arr))
@@ -1805,22 +1772,12 @@ module crosscov
 	function Cω_los(x1::Point3D,x2::Point3D;r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing)
 		
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs Nν ν_start_zeros
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs Nν ν_start_zeros dν
 
 		Cω_arr = zeros(ComplexF64,Nν)
-		Nν_Gfn = length(ν_arr)
 
-		if isnothing(ℓ_range)
-			ℓ_range = ℓ_arr
-		else
-			ℓ_range = intersect(ℓ_arr,ℓ_range)
-		end
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(ν_ind_range,1:Nν_Gfn)
-		end
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
 		function Cω_summodes(rank)
 
@@ -1830,9 +1787,8 @@ module crosscov
 
 			ν_ind_min = first(modes_on_proc)[2]
 			ν_ind_max = last(modes_on_proc)[2]
-			Nν_on_proc = ν_ind_max - ν_ind_min + 1
 
-			Cω_proc = OffsetArray(zeros(ComplexF64,Nν_on_proc),ν_ind_min:ν_ind_max)
+			Cω_proc = zeros(ComplexF64,ν_ind_min:ν_ind_max)
 
 			Pl_cosχ = Pl(cosχ(x1,x2),ℓmax=ℓ_arr[end])
 
@@ -1849,23 +1805,12 @@ module crosscov
 
 				# Get a list of (ℓ,ω) in this file
 				modes_in_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
-				# ℓ_in_file = read(file1[2],"mode_l")
-				# ω_ind_in_file = read(file1[2],"mode_omega_ind")
-
-				# @assert(all(zip(ℓ_in_file,ω_ind_in_file) .== modes_in_file),"Modes obtained by splitting do not match those in file")
 
 		    	for (ℓ,ω_ind) in intersect(modes_in_file,modes_on_proc)
 
 		    		mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
-		    		@assert(!isnothing(mode_index),"mode index $mode_index for ($ℓ,$ω_ind) not found by splitting across processors")
-		    		# @assert((ℓ_in_file[mode_index]==ℓ) && (ω_ind_in_file[mode_index]==ω_ind),
-		    		# 	"Mode found by splitting does not match that in file. Mode index $mode_index in "*
-		    		# 	"file $(@sprintf "Gfn_proc_%03d.fits" proc_id)")
-		    		
-		    		# @assert(1<=mode_index<=size(file1[1],5),"mode index beyond file limits")
-
-		    		ω = ν_arr[ω_ind]*2π
+		    		ω = 2π*dν*(ν_start_zeros + ω_ind)
 
 		    		G = read(Gsrc_file[1],r₁_ind,:,:,1,mode_index)
 		    		G0_r₁_rsrc = G[1,1] + im*G[2,1]
@@ -1891,12 +1836,13 @@ module crosscov
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
-		futures = [@spawnat p Cω_summodes(rank) for (rank,p) in enumerate(procs)]
 
-		for f in futures
-			Ci = fetch(f)
-			ax = axes(Ci,1)
-			@. Cω_arr[ax + ν_start_zeros] += Ci.parent
+		@sync for (rank,p) in enumerate(procs)
+			@async begin
+				Ci = remotecall_fetch(Cω_summodes,p,rank)
+				ax = axes(Ci,1)
+				@. Cω_arr[ax + ν_start_zeros] += Ci.parent
+			end
 		end
 
 		return Cω_arr
@@ -1933,23 +1879,12 @@ module crosscov
 	function Cωℓ_spectrum(;ℓ_range=nothing,ν_ind_range=nothing,r_src=Rsun-75e5,r_obs=Rsun-75e5)
 		
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs
+		@load joinpath(Gfn_path_src,"parameters.jld2") ℓ_arr num_procs Nν_Gfn dν
 
-		if !isnothing(ℓ_range)
-			ℓ_range = intersect(ℓ_arr,ℓ_range)
-		else
-			ℓ_range = ℓ_arr
-		end
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
-		Nν_Gfn = length(ν_arr)
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(ν_ind_range,1:Nν_Gfn)
-		end
-
-		robs_ind = argmin(abs.(r .- r_obs))
+		r_obs_ind = argmin(abs.(r .- r_obs))
 
 		function summodes(rank)
 			
@@ -1972,9 +1907,9 @@ module crosscov
 					
 					ℓω_index_in_file = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
-					ω = 2π*ν_arr[ω_ind]
+					ω = 2π*dν*(ν_start_zeros + ω_ind)
 
-		    		G = read(Gsrc_file[1],robs_ind,:,1,1,ℓω_index_in_file)
+		    		G = read(Gsrc_file[1],r_obs_ind,:,1,1,1,ℓω_index_in_file)
 		    		abs_α_robs² = G[1]^2 + G[2]^2
 
 		    		ℓω_index_in_arr = get_index_in_split_array(all_modes,(ℓ,ω_ind))
@@ -1995,14 +1930,14 @@ module crosscov
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
 
-		futures = [@spawnat p summodes(rank) for (rank,p) in enumerate(procs)]
-
 		Cℓω = zeros(ℓ_range,ν_ind_range)
 
-		for f in futures
-			Cℓω_part = fetch(f)
-			for ind in axes(Cℓω_part,1)
-				Cℓω[ind] = abs2(Cℓω_part[ind])
+		@sync for (rank,p) in enumerate(procs)
+			@async begin
+				Cℓω_part = remotecall_fetch(summodes,p,rank)
+				for ind in eachindex(Cℓω_part)
+					Cℓω[ind] = abs2(Cℓω_part[ind])
+				end
 			end
 		end
 
@@ -2026,21 +1961,12 @@ module crosscov
 	function ∂ϕ₂Cω(x1::Point3D,x2::Point3D;ℓ_range=nothing,ν_ind_range=nothing,r_src=Rsun-75e5)
 		
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs ν_start_zeros Nν
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
 
-		Nν_Gfn = length(ν_arr)
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
-		if isnothing(ℓ_range)
-			ℓ_range = ℓ_arr
-		else
-			ℓ_range = max(ℓ_arr[1],ℓ_range[1]):min(ℓ_arr[end],ℓ_range[end])
-		end
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		end
-
-		function Cω_summodes(rank)
+		function summodes(rank)
 
 			modes_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank) |> collect
 			proc_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,modes_on_proc,num_procs)
@@ -2068,15 +1994,15 @@ module crosscov
 
 					@assert(!isnothing(mode_index),"mode index $mode_index for ($ℓ,$ω_ind) not found by splitting across processors")
 
-		    		ω = 2π * ν_arr[ω_ind]
+		    		ω = 2π * dν*(ν_start_zeros + ω_ind)
 		    		
-		    		G = read(Gsrc_file[1],r₁_ind,:,1,1,mode_index)
+		    		G = read(Gsrc_file[1],r₁_ind,:,1,1,1,mode_index)
 		    		α_r₁ = G[1] + im*G[2]
 
 		    		if r₁_ind == r₂_ind
 		    			α_r₂ = α_r₁
 		    		else
-						G = read(Gsrc_file[1],r₂_ind,:,1,1,mode_index)
+						G = read(Gsrc_file[1],r₂_ind,:,1,1,1,mode_index)
 			    		α_r₂ = G[1] + im*G[2]
 		    		end
 		    		Cω_proc[ω_ind] += ω^2 * Powspec(ω) * (2ℓ+1)/4π * conj(α_r₁) * α_r₂ * ∂ϕ₂Pl_cosχ[ℓ]
@@ -2091,14 +2017,15 @@ module crosscov
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
-		futures = [@spawnat p Cω_summodes(rank) for (rank,p) in enumerate(procs)]
 
 		Cω_arr = zeros(ComplexF64,Nν)
 
-		for f in futures
-			Ci = fetch(f)
-			ax = axes(Ci,1)
-			@. Cω_arr[ax + ν_start_zeros] += Ci.parent
+		@sync for (rank,p) in enumerate(procs)
+			@async begin
+				Ci = remotecall_fetch(summodes,p,rank)
+				ax = axes(Ci,1)
+				@. Cω_arr[ax + ν_start_zeros] += Ci.parent
+			end
 		end
 
 		return Cω_arr
@@ -2106,25 +2033,14 @@ module crosscov
 
 	function ∂ϕ₂Cω(x1::Point3D,x2_arr::Vector{Point3D};ℓ_range=nothing,ν_ind_range=nothing,r_src=Rsun-75e5)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs ν_start_zeros Nν
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
 
-		Nν_Gfn = length(ν_arr)
-
-		if isnothing(ℓ_range)
-			ℓ_range = ℓ_arr
-		else
-			ℓ_range = intersect(ℓ_range,ℓ_arr)
-		end
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(ν_ind_range,1:Nν_Gfn)
-		end
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
 		∂ϕ₂Pl_cosχ = [dPl(cosχ(x1,x2),ℓmax=ℓ_range[end]) .* ∂ϕ₂cosχ(x1,x2) for x2 in x2_arr]
 
-		function Cω_summodes(rank)
+		function summodes(rank)
 
 			modes_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank) |> collect
 			proc_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,modes_on_proc,num_procs)
@@ -2148,9 +2064,9 @@ module crosscov
 					
 					ℓω_index_in_file = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
-		    		ω = 2π * ν_arr[ω_ind]
+		    		ω = 2π * dν*(ν_start_zeros + ω_ind)
 		    		
-		    		G = read(Gsrc_file[1],r₁_ind,:,1,1,ℓω_index_in_file)
+		    		G = read(Gsrc_file[1],r₁_ind,:,1,1,1,ℓω_index_in_file)
 		    		α_r₁ = G[1] + im*G[2]
 
 		    		for (x2ind,x2) in enumerate(x2_arr)
@@ -2160,7 +2076,7 @@ module crosscov
 			    			if r₂_ind == r₁_ind
 			    				α_r₂ = α_r₁
 			    			else
-				    			G = read(Gsrc_file[1],r₂_ind,:,1,1,ℓω_index_in_file)
+				    			G = read(Gsrc_file[1],r₂_ind,:,1,1,1,ℓω_index_in_file)
 				    			α_r₂ = G[1] + im*G[2]
 				    		end
 			    		end
@@ -2177,14 +2093,22 @@ module crosscov
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
-		futures = [@spawnat p Cω_summodes(rank) for (rank,p) in enumerate(procs)]
 
 		Cω_arr = zeros(ComplexF64,length(x2_arr),Nν)
 
-		for f in futures
-			Ci = fetch(f)
-			ν_range = axes(Ci,2)
-			@. Cω_arr[:,ν_range + ν_start_zeros] += Ci.parent
+		# futures = [@spawnat p summodes(rank) for (rank,p) in enumerate(procs)]
+		# for f in futures
+		# 	Ci = fetch(f)
+		# 	ν_range = axes(Ci,2)
+		# 	@. Cω_arr[:,ν_range + ν_start_zeros] += Ci.parent
+		# end
+
+		@sync for (rank,p) in enumerate(procs)
+			@async begin
+				Ci = remotecall_fetch(summodes,p,rank)
+				ax = axes(Ci,2)
+				@. Cω_arr[:,ax + ν_start_zeros] += Ci.parent
+			end
 		end
 
 		return copy(transpose(Cω_arr))
@@ -2192,21 +2116,10 @@ module crosscov
 
 	function ∂ϕ₂Cω(n1::Point2D,n2_arr::Vector{Point2D};ℓ_range=nothing,ν_ind_range=nothing,r_src=Rsun-75e5,r_obs=Rsun-75e5)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs ν_start_zeros Nν
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
 
-		Nν_Gfn = length(ν_arr)
-
-		if isnothing(ℓ_range)
-			ℓ_range = ℓ_arr
-		else
-			ℓ_range = intersect(ℓ_range,ℓ_arr)
-		end
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(ν_ind_range,1:Nν_Gfn)
-		end
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
 		∂ϕ₂Pl_cosχ = [dPl(cosχ(n1,n2),ℓmax=ℓ_range[end]) .* ∂ϕ₂cosχ(n1,n2) for n2 in n2_arr]
 
@@ -2221,7 +2134,7 @@ module crosscov
 
 			Cω_proc = zeros(ComplexF64,1:length(n2_arr),ν_ind_min:ν_ind_max)
 
-			robs_ind = argmin(abs.(r .- r_obs))
+			r_obs_ind = argmin(abs.(r .- r_obs))
 
 			for proc_id in proc_range
 				Gsrc_file = FITS(joinpath(Gfn_path_src,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
@@ -2233,9 +2146,9 @@ module crosscov
 					
 					ℓω_index_in_file = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
-		    		ω = 2π * ν_arr[ω_ind]
+		    		ω = 2π * dν*(ν_start_zeros + ω_ind)
 		    		
-		    		G = read(Gsrc_file[1],robs_ind,:,1,1,ℓω_index_in_file)
+		    		G = read(Gsrc_file[1],r_obs_ind,:,1,1,1,ℓω_index_in_file)
 		    		αℓω2 = G[1]^2 + G[2]^2
 
 		    		for (n2ind,n2) in enumerate(n2_arr)
@@ -2252,14 +2165,22 @@ module crosscov
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
-		futures = [@spawnat p Cω_summodes(rank) for (rank,p) in enumerate(procs)]
 
 		Cω_arr = zeros(ComplexF64,length(n2_arr),Nν)
 
-		for f in futures
-			Ci = fetch(f)
-			ν_range = axes(Ci,2)
-			@. Cω_arr[:,ν_range + ν_start_zeros] += Ci.parent
+		# futures = [@spawnat p Cω_summodes(rank) for (rank,p) in enumerate(procs)]
+		# for f in futures
+		# 	Ci = fetch(f)
+		# 	ν_range = axes(Ci,2)
+		# 	@. Cω_arr[:,ν_range + ν_start_zeros] += Ci.parent
+		# end
+
+		@sync for (rank,p) in enumerate(procs)
+			@async begin
+				Ci = remotecall_fetch(summodes,p,rank)
+				ax = axes(Ci,2)
+				@. Cω_arr[:,ax + ν_start_zeros] += Ci.parent
+			end
 		end
 
 		return copy(transpose(Cω_arr))
@@ -2268,7 +2189,7 @@ module crosscov
 	# Time-domain cross-covariance
 	########################################################################################################
 
-	function Ct(x1::Point3D,x2::Point3D;r_src=Rsun-75e5,kwargs...)
+	function Ct(x1::SphericalPoint,x2::SphericalPoint;r_src=Rsun-75e5,kwargs...)
 		
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
@@ -2279,7 +2200,7 @@ module crosscov
 
 	Ct(n1::T,n2_arr::Vector{T};kwargs...) where T<:SphericalPoint = Ct(n1,n2;kwargs...)
 
-	function ∂ϕ₂Ct(x1::Point3D,x2::Point3D;r_src=Rsun-75e5,kwargs...)
+	function ∂ϕ₂Ct(x1::SphericalPoint,x2::SphericalPoint;r_src=Rsun-75e5,kwargs...)
 		
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
@@ -2288,7 +2209,13 @@ module crosscov
 		brfft(C,Nt,1) .*dν
 	end
 
-	∂ϕ₂Ct(n1::T,n2_arr::Vector{T};kwargs...) where T<:SphericalPoint = ∂ϕ₂Ct(n1,n2;kwargs...)
+	function ∂ϕ₂Ct(n1::T,n2_arr::Vector{T};r_src=Rsun-75e5,kwargs...) where T<:SphericalPoint
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
+
+		C = ∂ϕ₂Cω(n1,n2_arr;kwargs...)
+		brfft(C,Nt,1) .*dν
+	end
 
 	########################################################################################################
 	# Cross-covariance at all distances on the equator, essentially the time-distance diagram
@@ -2297,28 +2224,16 @@ module crosscov
 	function CΔϕω(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;ℓ_range=nothing,r_src=Rsun-75e5,Δϕ_arr=nothing)
 
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs ν_full ν_start_zeros
-
-		Nν_Gfn = length(ν_arr)
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_full ν_start_zeros dν
 
 		r₁_ind = argmin(abs.(r .- r₁))
 		r₂_ind = argmin(abs.(r .- r₂))
 
-		if !isnothing(ℓ_range)
-			ℓ_range = intersect(ℓ_range,ℓ_arr)
-		else
-			ℓ_range = ℓ_arr
-		end
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ℓmax = maximum(ℓ_range)
 
-		ℓmax = ℓ_range[end]
-		
-		
-		if isnothing(Δϕ_arr)
-			nϕ = ℓmax
-			Δϕ_arr = LinRange(0,π,nϕ+1)[1:end-1]
-		else
-			nϕ = length(Δϕ_arr)
-		end
+		Δϕ_arr = intersect_fallback(Δϕ_arr,LinRange(0,π,ℓmax+1)[1:end-1])
+		nϕ = length(Δϕ_arr)
 
 		Cϕω_arr = zeros(ComplexF64,nϕ,length(ν_full))
 
@@ -2350,7 +2265,7 @@ module crosscov
 					
 					mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
-		    		ω = 2π * ν_arr[ω_ind]
+		    		ω = 2π * dν*(ν_start_zeros + ω_ind)
 
 		    		
 		    		G = read(Gsrc_file[1],r₁_ind,:,1,1,mode_index)
@@ -2377,13 +2292,14 @@ module crosscov
 
 		procs = workers_active(ℓ_range,1:Nν_Gfn)
 		num_workers = length(procs)
-	    futures = [@spawnat p summodes(rank) for (rank,p) in enumerate(procs)]
 
-	    for f in futures
-	    	Ci = fetch(f)
-	    	ν_inds = axes(Ci,2)
-	    	@. Cϕω_arr[:,ν_inds .+ ν_start_zeros] += Ci.parent
-	    end
+	    @sync for (rank,p) in enumerate(procs)
+			@async begin
+				Ci = remotecall_fetch(summodes,p,rank)
+				ax = axes(Ci,2)
+				@. Cω_arr[:,ν_inds .+ ν_start_zeros] += Ci.parent
+			end
+		end
 
 		return Cϕω_arr
 	end
@@ -2510,41 +2426,30 @@ module crosscov
 		r₂_ind = argmin(abs.(r .- x2.r))
 
 		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs
-		Nν_Gfn = length(ν_arr)
 
 		num_procs_obs1 = load(joinpath(Gfn_path_x1,"parameters.jld2"),"num_procs")
 		num_procs_obs2 = load(joinpath(Gfn_path_x2,"parameters.jld2"),"num_procs")
 
-		if !isnothing(ℓ_range)
-			ℓ_range = intersect(ℓ_arr,ℓ_range)
-		else
-			ℓ_range = ℓ_arr
-		end
+		Nν_Gfn = length(ν_arr)
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(ν_ind_range,1:Nν_Gfn)
-		end
-
-		ℓmax = ℓ_arr[end]
+		ℓmax = maximum(ℓ_arr)
 
 		∂ϕ₂Pl_cosχ = dPl(cosχ(x1,x2),ℓmax=ℓmax) .*∂ϕ₂cosχ(x1,x2)
 
-		# Gfn_arr = load_Greenfn_radial_coordinates_onefreq(Gfn_path,ν,ν_arr,ℓ_arr,num_procs)
-
 		δC = zeros(ComplexF64,Nν_Gfn)
 
-		function δC_summodes(rank)
+		function summodes(rank)
 			modes_on_proc = collect(split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank))
 
 			proc_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,modes_on_proc,num_procs)
 
-			ν_min_ind = first(collect(modes_on_proc))[2]
-			ν_max_ind = last(collect(modes_on_proc))[2]
+			ν_min_ind = first(modes_on_proc)[2]
+			ν_max_ind = last(modes_on_proc)[2]
 			Nν_on_proc = ν_max_ind - ν_min_ind + 1
 
-			δC_r = OffsetArray(zeros(ComplexF64,nr,Nν_on_proc),1:nr,ν_min_ind:ν_max_ind)
+			δC_r = zeros(ComplexF64,1:nr,ν_min_ind:ν_max_ind)
 
 			δG_r₁_rsrc = zeros(ComplexF64,nr)
 
@@ -2568,7 +2473,7 @@ module crosscov
 
 		    		ω = 2π*ν_arr[ω_ind]
 		    		
-		    		G = read(Gsrc_file[1],:,:,1:2,1,ℓω_index_Gsrc_file)
+		    		G = read(Gsrc_file[1],:,:,1:2,1,1,ℓω_index_Gsrc_file)
 		    		Gsrc_0 = G[:,1,1] + im*G[:,2,1]
 		    		Gsrc_1 = G[:,1,2] + im*G[:,2,2]
 		    		G_r₁_rsrc = Gsrc_0[r₁_ind]
@@ -2578,7 +2483,7 @@ module crosscov
 		    		proc_id_mode_Gobs1,ℓω_index_Gobs1_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,(ℓ,ω_ind),num_procs_obs1)
 					Gobs1_file = FITS(joinpath(Gfn_path_x1,@sprintf "Gfn_proc_%03d.fits" proc_id_mode_Gobs1),"r")
 
-		    		G = read(Gobs1_file[1],:,:,1:2,1,ℓω_index_Gobs1_file)
+		    		G = read(Gobs1_file[1],:,:,1:2,1,1,ℓω_index_Gobs1_file)
 		    		Gobs1_0 = G[:,1,1] + im*G[:,2,1]
 		    		Gobs1_1 = G[:,1,2] + im*G[:,2,2]
 
@@ -2594,7 +2499,7 @@ module crosscov
 
 						Gobs2_file = FITS(joinpath(Gfn_path_x2,@sprintf "Gfn_proc_%03d.fits" proc_id_mode_Gobs2),"r")
 
-			    		G = read(Gobs2_file[1],:,:,1:2,1,ℓω_index_Gobs2_file)
+			    		G = read(Gobs2_file[1],:,:,1:2,1,1,ℓω_index_Gobs2_file)
 			    		Gobs2_0 = G[:,1,1] + im*G[:,2,1]
 			    		Gobs2_1 = G[:,1,2] + im*G[:,2,2]
 
@@ -2620,12 +2525,13 @@ module crosscov
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
-		futures = [@spawnat p δC_summodes(rank) for (rank,p) in enumerate(procs)]
 
-		for f in futures
-			δC_i = fetch(f)
-			ax = axes(δC_i,1)
-			@. δC[ax] += δC_i
+		@sync for (rank,p) in enumerate(procs)
+			@async begin
+				δC_i = remotecall_fetch(summodes,p,rank)
+				ax = axes(Ci,1)
+				@. δC[ax] += δC_i
+			end
 		end
 
 		return @. -2im*Ω_rot*δC
@@ -2642,11 +2548,7 @@ module crosscov
 
 		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs dν ν_start_zeros
 
-		if !isnothing(ℓ_range)
-			ℓ_range = intersect(ℓ_range,ℓ_arr)
-		else
-			ℓ_range = ℓ_arr
-		end
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
 
 		ν_test_ind = argmin(abs.(ν_arr .- ν))
 		ν_on_grid = ν_arr[ν_test_ind]
@@ -2673,17 +2575,8 @@ module crosscov
 
 		Nν_Gfn = length(ν_arr)
 
-		if !isnothing(ℓ_range)
-			ℓ_range = intersect(ℓ_range,ℓ_arr)
-		else
-			ℓ_range = ℓ_arr
-		end
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(ν_ind_range,1:Nν_Gfn)
-		end
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 	
 		dω = 2π*dν
 
@@ -2893,8 +2786,6 @@ module crosscov
 		peak_center = argmax(env[τ_low_ind:τ_high_ind]) + τ_low_ind - 1
 		points_around_max = env[peak_center-2:peak_center+2]
 		amp = env[peak_center]
-		# println("$amp $peak_center")
-		# println(points_around_max)
 		# Assuming a roughly gaussian peak, fit a quadratic to log(Cω) to obtain σ
 
 		A,t0,σt = gaussian_fit(peak_center-2:peak_center+2, points_around_max)
@@ -2916,7 +2807,6 @@ module crosscov
 			plt.plot((1:Nt).*dt,C_t,color="black")
 			plt.axvline(t_inds_range[1]*dt,ls="solid")
 			plt.axvline(t_inds_range[end]*dt,ls="solid")
-			# plt.xlim(0,60^2*6)
 			plt.title("C(x₁,x₂,t)")
 
 			plt.subplot(413,sharex=ax2)
@@ -2984,27 +2874,17 @@ module kernel
 		num_procs_obs2 = load(joinpath(Gfn_path_x2,"parameters.jld2"),"num_procs")
 
 		Nν_Gfn = length(ν_arr)
-
-		if isnothing(ℓ_range)
-			ℓ_range = ℓ_arr
-		else
-			ℓ_range = intersect(ℓ_range,ℓ_arr)
-		end
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(1:Nν_Gfn,ν_ind_range)
-		end
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
 		h_ω_arr = h(x1,x2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src).h_ω[ν_start_zeros .+ ν_ind_range] # only in range
 
 		r₁_ind = argmin(abs.(r .- x1.r))
 		r₂_ind = argmin(abs.(r .- x2.r))
 
-		dω = dν*2π		
+		dω = dν*2π
 
-		function sum_modes(rank)
+		function summodes(rank)
 		
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
@@ -3016,12 +2896,12 @@ module kernel
 			δG_r₁_rsrc = zeros(ComplexF64,nr) # This is not actually δG, it's just a radial function dependent on f
 
 			G = zeros(nr,2,2)
-			Gsrc = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
-			Gobs1 = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
+			Gsrc = zeros(ComplexF64,1:nr,0:1)
+			Gobs1 = zeros(ComplexF64,1:nr,0:1)
 
 			if r₁_ind != r₂_ind
 				δG_r₂_rsrc = zeros(ComplexF64,nr)
-				Gobs2 = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
+				Gobs2 = zeros(ComplexF64,1:nr,0:1)
 			else
 				δG_r₂_rsrc = view(δG_r₁_rsrc,:)
 			end
@@ -3031,16 +2911,15 @@ module kernel
 				Gsrc_file = FITS(joinpath(Gfn_path_src,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")				
 				# Get a list of (ℓ,ω) in this file
 				modes_in_Gsrc_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
-				
 
 				for (ℓ,ω_ind) in intersect(ℓ_ωind_iter_on_proc,modes_in_Gsrc_file)
 
 					# Get index of this mode in the file
 					ℓω_index_Gsrc_file = get_index_in_split_array(modes_in_Gsrc_file,(ℓ,ω_ind))
-					ω = 2π*ν_arr[ω_ind]
+					ω = dω*(ν_start_zeros + ω_ind)
 
 					# Green function about source location
-		    		G .= read(Gsrc_file[1],:,:,1:2,1,ℓω_index_Gsrc_file)
+		    		G .= read(Gsrc_file[1],:,:,1:2,1,1,ℓω_index_Gsrc_file)
 		    		@. Gsrc[:,0] = G[:,1,1] + im*G[:,2,1]
 		    		@. Gsrc[:,1] = G[:,1,2] + im*G[:,2,2]
 		    		G_r₁_rsrc = Gsrc[r₁_ind,0]
@@ -3050,7 +2929,7 @@ module kernel
 		    		proc_id_mode_Gobs1,ℓω_index_Gobs1_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,(ℓ,ω_ind),num_procs_obs1)
 		    		Gobs1_file = FITS(joinpath(Gfn_path_x1,@sprintf "Gfn_proc_%03d.fits" proc_id_mode_Gobs1),"r")
 
-		    		G .= read(Gobs1_file[1],:,:,1:2,1,ℓω_index_Gobs1_file)
+		    		G .= read(Gobs1_file[1],:,:,1:2,1,1,ℓω_index_Gobs1_file)
 		    		@. Gobs1[:,0] = G[:,1,1] + im*G[:,2,1]
 		    		@. Gobs1[:,1] = G[:,1,2] + im*G[:,2,2]
 
@@ -3064,7 +2943,7 @@ module kernel
 				    	proc_id_mode_Gobs2,ℓω_index_Gobs2_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,(ℓ,ω_ind),num_procs_obs2)
 
 				    	Gobs2_file = FITS(joinpath(Gfn_path_x2,@sprintf "Gfn_proc_%03d.fits" proc_id_mode_Gobs2),"r")
-			    		G .= read(Gobs2_file[1],:,:,1:2,1,ℓω_index_Gobs2_file)
+			    		G .= read(Gobs2_file[1],:,:,1:2,1,1,ℓω_index_Gobs2_file)
 			    		@. Gobs2[:,0] = G[:,1,1] + im*G[:,2,1]
 			    		@. Gobs2[:,1] = G[:,1,2] + im*G[:,2,2]
 
@@ -3089,9 +2968,13 @@ module kernel
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
-		kernel_futures = [@spawnat p sum_modes(rank) for (rank,p) in enumerate(procs)]
 
-		K = sum(fetch.(kernel_futures))
+		K = zeros(ComplexF64,nr)
+		@sync for (rank,p) in enumerate(procs)
+			@async begin
+				K .+= remotecall_fetch(summodes,p,rank)
+			end
+		end
 
 		return K
 	end
@@ -3106,25 +2989,15 @@ module kernel
 		num_procs_obs1 = load(joinpath(Gfn_path_x1,"parameters.jld2"),"num_procs")
 
 		Nν_Gfn = length(ν_arr)
-
-		if isnothing(ℓ_range)
-			ℓ_range = ℓ_arr
-		else
-			ℓ_range = intersect(ℓ_range,ℓ_arr)
-		end
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(1:Nν_Gfn,ν_ind_range)
-		end
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
 		r₁_ind = argmin(abs.(r .- x1.r))
 		r₂_ind_prev = argmin(abs.(r .- x2_arr[1].r))
 
 		dω = dν*2π
 
-		function sum_modes(rank)
+		function summodes(rank)
 		
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
@@ -3135,9 +3008,9 @@ module kernel
 			δG_r₂_rsrc = zeros(ComplexF64,nr)
 
 			G = zeros(nr,2,2)
-			Gsrc = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
-			Gobs1 = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
-			Gobs2 = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)			
+			Gsrc = zeros(ComplexF64,1:nr,0:1)
+			Gobs1 = zeros(ComplexF64,1:nr,0:1)
+			Gobs2 = zeros(ComplexF64,1:nr,0:1)
 
 			for proc_id in proc_id_range
 
@@ -3149,10 +3022,10 @@ module kernel
 
 					# Get index of this mode in the file
 					ℓω_index_Gsrc_file = get_index_in_split_array(modes_in_Gsrc_file,(ℓ,ω_ind))
-					ω = 2π*ν_arr[ω_ind]
+					ω = dω*(ν_start_zeros + ω_ind)
 
 					# Green function about source location
-		    		G .= read(Gsrc_file[1],:,:,1:2,1,ℓω_index_Gsrc_file)
+		    		G .= read(Gsrc_file[1],:,:,1:2,1,1,ℓω_index_Gsrc_file)
 		    		@. Gsrc[:,0] = G[:,1,1] + im*G[:,2,1]
 		    		@. Gsrc[:,1] = G[:,1,2] + im*G[:,2,2]
 		    		G_r₁_rsrc = Gsrc[r₁_ind,0]
@@ -3162,7 +3035,7 @@ module kernel
 		    		proc_id_mode_Gobs1,ℓω_index_Gobs1_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,(ℓ,ω_ind),num_procs_obs1)
 		    		Gobs1_file = FITS(joinpath(Gfn_path_x1,@sprintf "Gfn_proc_%03d.fits" proc_id_mode_Gobs1),"r")
 
-		    		G .= read(Gobs1_file[1],:,:,1:2,1,ℓω_index_Gobs1_file)
+		    		G .= read(Gobs1_file[1],:,:,1:2,1,1,ℓω_index_Gobs1_file)
 		    		@. Gobs1[:,0] = G[:,1,1] + im*G[:,2,1]
 		    		@. Gobs1[:,1] = G[:,1,2] + im*G[:,2,2]
 
@@ -3184,7 +3057,7 @@ module kernel
 					    	proc_id_mode_Gobs2,ℓω_index_Gobs2_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,(ℓ,ω_ind),num_procs_obs2)
 
 					    	Gobs2_file = FITS(joinpath(Gfn_path_x2,@sprintf "Gfn_proc_%03d.fits" proc_id_mode_Gobs2),"r")
-				    		G .= read(Gobs2_file[1],:,:,1:2,1,ℓω_index_Gobs2_file)
+				    		G .= read(Gobs2_file[1],:,:,1:2,1,1,ℓω_index_Gobs2_file)
 				    		@. Gobs2[:,0] = G[:,1,1] + im*G[:,2,1]
 				    		@. Gobs2[:,1] = G[:,1,2] + im*G[:,2,2]
 
@@ -3214,9 +3087,16 @@ module kernel
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
-		kernel_futures = [@spawnat p sum_modes(rank) for (rank,p) in enumerate(procs)]
 
-		K = sum(fetch.(kernel_futures))
+		# kernel_futures = [@spawnat p sum_modes(rank) for (rank,p) in enumerate(procs)]
+		# K = sum(fetch.(kernel_futures))
+
+		K = zeros(ComplexF64,nr,length(x2_arr))
+		@sync for (rank,p) in enumerate(procs)
+			@async begin
+				K .+= remotecall_fetch(summodes,p,rank)
+			end
+		end
 
 		return K
 	end
@@ -3230,27 +3110,17 @@ module kernel
 		num_procs_obs = load(joinpath(Gfn_path_obs,"parameters.jld2"),"num_procs")
 
 		Nν_Gfn = length(ν_arr)
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
-		if isnothing(ℓ_range)
-			ℓ_range = ℓ_arr
-		else
-			ℓ_range = intersect(ℓ_range,ℓ_arr)
-		end
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(1:Nν_Gfn,ν_ind_range)
-		end
-
-		robs_ind = argmin(abs.(r .- r_obs))
+		r_obs_ind = argmin(abs.(r .- r_obs))
 
 		dω = dν*2π
 
 		∂ϕ₂Pl_cosχ = dPl(cosχ(n1,n2),ℓmax=ℓ_arr[end]).*∂ϕ₂cosχ(n1,n2)
 		h_ω_arr = h(n1,n2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src,r_obs=r_obs).h_ω[ν_start_zeros .+ ν_ind_range] # only in range
 
-		function sum_modes(rank)
+		function summodes(rank)
 		
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
@@ -3260,8 +3130,8 @@ module kernel
 			δG_robs_rsrc = zeros(ComplexF64,nr) # This is not actually δG, it's just a radial function dependent on f
 
 			G = zeros(nr,2,2)
-			Gsrc = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
-			Gobs = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
+			Gsrc = zeros(ComplexF64,nr,0:1)
+			Gobs = zeros(ComplexF64,nr,0:1)
 
 			for proc_id in proc_id_range
 
@@ -3280,13 +3150,13 @@ module kernel
 
 					# Get index of this mode in the file
 					ℓω_index_Gsrc_file = get_index_in_split_array(modes_in_Gsrc_file,(ℓ,ω_ind))
-					ω = 2π*ν_arr[ω_ind]
+					ω = dω*(ν_start_zeros + ω_ind)
 
 					# Green function about source location
-		    		G .= read(Gsrc_file[1],:,:,1:2,1,ℓω_index_Gsrc_file)
+		    		G .= read(Gsrc_file[1],:,:,1:2,1,1,ℓω_index_Gsrc_file)
 		    		@. Gsrc[:,0] = G[:,1,1] + im*G[:,2,1]
 		    		@. Gsrc[:,1] = G[:,1,2] + im*G[:,2,2]
-		    		G_robs_rsrc = Gsrc[robs_ind,0]
+		    		G_robs_rsrc = Gsrc[r_obs_ind,0]
 
 		    		# Green function about receiver location
 		    		if num_procs_obs != num_procs
@@ -3296,7 +3166,7 @@ module kernel
 		    			ℓω_index_Gobs_file = ℓω_index_Gsrc_file
 		    		end
 
-		    		G .= read(Gobs_file[1],:,:,1:2,1,ℓω_index_Gobs_file)
+		    		G .= read(Gobs_file[1],:,:,1:2,1,1,ℓω_index_Gobs_file)
 		    		@. Gobs[:,0] = G[:,1,1] + im*G[:,2,1]
 		    		@. Gobs[:,1] = G[:,1,2] + im*G[:,2,2]
 
@@ -3313,7 +3183,7 @@ module kernel
 				end
 
 				close(Gsrc_file)
-				if num_procs_obs == num_procs
+				if num_procs_obs == num_procs	
 					close(Gobs_file)
 				end
 			end
@@ -3323,9 +3193,16 @@ module kernel
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
-		kernel_futures = [@spawnat p sum_modes(rank) for (rank,p) in enumerate(procs)]
 
-		K = sum(fetch.(kernel_futures))
+		K = zeros(ComplexF64,nr)
+		@sync for (rank,p) in enumerate(procs)
+			@async begin
+				K .+= remotecall_fetch(summodes,p,rank)
+			end
+		end
+
+		# kernel_futures = [@spawnat p summodes(rank) for (rank,p) in enumerate(procs)]
+		# K = sum(fetch.(kernel_futures))
 
 		return K
 	end
@@ -3339,24 +3216,14 @@ module kernel
 		num_procs_obs = load(joinpath(Gfn_path_obs,"parameters.jld2"),"num_procs")
 
 		Nν_Gfn = length(ν_arr)
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
-		if isnothing(ℓ_range)
-			ℓ_range = ℓ_arr
-		else
-			ℓ_range = intersect(ℓ_range,ℓ_arr)
-		end
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(1:Nν_Gfn,ν_ind_range)
-		end
-
-		robs_ind = argmin(abs.(r .- r_obs))
+		r_obs_ind = argmin(abs.(r .- r_obs))
 
 		dω = dν*2π
 
-		function sum_modes(rank)
+		function summodes(rank)
 		
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
@@ -3386,13 +3253,13 @@ module kernel
 
 					# Get index of this mode in the file
 					ℓω_index_Gsrc_file = get_index_in_split_array(modes_in_Gsrc_file,(ℓ,ω_ind))
-					ω = 2π*ν_arr[ω_ind]
+					ω = dω*(ν_start_zeros + ω_ind)
 
 					# Green function about source location
-		    		G .= read(Gsrc_file[1],:,:,1:2,1,ℓω_index_Gsrc_file)
+		    		G .= read(Gsrc_file[1],:,:,1:2,1,1,ℓω_index_Gsrc_file)
 		    		@. Gsrc[:,0] = G[:,1,1] + im*G[:,2,1]
 		    		@. Gsrc[:,1] = G[:,1,2] + im*G[:,2,2]
-		    		G_robs_rsrc = Gsrc[robs_ind,0]
+		    		G_robs_rsrc = Gsrc[r_obs_ind,0]
 
 		    		# Green function about receiver location
 		    		if num_procs_obs != num_procs
@@ -3402,7 +3269,7 @@ module kernel
 		    			ℓω_index_Gobs_file = ℓω_index_Gsrc_file
 		    		end
 
-		    		G .= read(Gobs_file[1],:,:,1:2,1,ℓω_index_Gobs_file)
+		    		G .= read(Gobs_file[1],:,:,1:2,1,1,ℓω_index_Gobs_file)
 		    		@. Gobs[:,0] = G[:,1,1] + im*G[:,2,1]
 		    		@. Gobs[:,1] = G[:,1,2] + im*G[:,2,2]
 
@@ -3438,9 +3305,16 @@ module kernel
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
-		kernel_futures = [@spawnat p sum_modes(rank) for (rank,p) in enumerate(procs)]
 
-		K = sum(fetch.(kernel_futures))
+		# kernel_futures = [@spawnat p sum_modes(rank) for (rank,p) in enumerate(procs)]
+		# K = sum(fetch.(kernel_futures))
+
+		K = zeros(ComplexF64,nr,length(n2_arr))
+		@sync for (rank,p) in enumerate(procs)
+			@async begin
+				K .+= remotecall_fetch(summodes,p,rank)
+			end
+		end
 
 		return K
 	end
@@ -3462,7 +3336,7 @@ module kernel
 
 		Nν = length(ν_arr)
 
-		δτ = zero(Float64)
+		δτ = 0.0
 
 		δC = δCω_uniform_rotation_firstborn_integrated_over_angle(n1,n2;Ω_rot=Ω_rot,kwargs...)
 
@@ -3484,7 +3358,7 @@ module kernel
 
 		dω = dν*2π
 
-		δτ = zero(Float64)
+		δτ = 0.0
 
 		δC = δCω_uniform_rotation_rotatedwaves_linearapprox(n1,n2;Ω_rot=Ω_rot,kwargs...)[ν_Gfn_ind_range]
 
@@ -3558,15 +3432,14 @@ module kernel
 	end
 
 	################################################################################################################
-
-
-	################################################################################################################
 	# All kernels
 	################################################################################################################
 	
 	Nℓ′ℓs(ℓ′,ℓ,s) = √((2ℓ+1)*(2ℓ′+1)/(4π*(2s+1)))
 
-	function flow_kernels_srange_t0(x1::Point3D,x2::Point3D,s_max;ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,r_src=Rsun-75e5,K_components=-1:1)
+	function flow_kernels_srange_t0(x1::Point3D,x2::Point3D,s_max;
+		ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,r_src=Rsun-75e5,K_components=-1:1)
+
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
 		Gfn_path_x2 = Gfn_path_from_source_radius(x2)
@@ -3576,20 +3449,10 @@ module kernel
 		num_procs_obs1 = load(joinpath(Gfn_path_x1,"parameters.jld2"),"num_procs")
 		num_procs_obs2 = load(joinpath(Gfn_path_x2,"parameters.jld2"),"num_procs")
 
-		if isnothing(ℓ_range)
-			ℓ_range = ℓ_arr
-		else
-			ℓ_range = intersect(ℓ_range,ℓ_arr)
-		end
-
 		Nν_Gfn = length(ν_arr)
-
-		if isnothing(ν_ind_range)
-			ν_ind_range = 1:Nν_Gfn
-		else
-			ν_ind_range = intersect(1:Nν_Gfn,ν_ind_range)
-		end
-
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		
 		h_ω_arr = h(x1,x2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src).h_ω[ν_start_zeros .+ ν_ind_range] # only in range
 
 		r₁_ind = argmin(abs.(r .- x1.r))
@@ -3597,62 +3460,93 @@ module kernel
 
 		dω = dν*2π
 
-		function sum_modes(rank)
+		function summodes(rank)
+
+			parallel_utilities_time = 0.0
+			fits_time = 0.0
+			biposh_time = 0.0
+			radial_time = 0.0
+			sum_over_s_time = 0.0
+			total_proc_time = 0.0
+
+			total_proc_time += @elapsed begin
 		
+			parallel_utilities_time += @elapsed begin
 			ℓ_ωind_iter_on_proc = collect(split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank))
 			proc_id_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
+			end
 
-			K = zeros(1:nr,K_components,1:s_max)
+			K = zeros(nr,K_components,1:s_max)
 
-			Gsrc = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
-			drGsrc = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
-			Gobs1 = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
-
-			# gℓω_r₁_rsrc = OffsetArray(zeros(ComplexF64,nr),1:nr)
+			Gsrc = zeros(ComplexF64,nr,0:1)
+			drGsrc = zeros(ComplexF64,nr,0:1)
+			Gobs1 = zeros(ComplexF64,nr,0:1)
 
 			if r₁_ind != r₂_ind
-				Gobs2 = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
+				Gobs2 = zeros(ComplexF64,nr,0:1)
 			end
 
 			# temporary array to precompute the radial part, indices are (r,η)
-			f_radial_0_r₁ = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1) # the η=-1 and η=1 terms are identical
-			f_radial_1_r₁ = OffsetArray(zeros(ComplexF64,nr,3),1:nr,-1:1)
-			fℓ′ℓsω_r₁ = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
+			f_radial_0_r₁ = zeros(ComplexF64,nr,0:1) # the η=-1 and η=1 terms are identical
+			f_radial_1_r₁ = zeros(ComplexF64,nr,-1:1)
+			fℓ′ℓsω_r₁ = zeros(ComplexF64,nr,0:1)
 
 			if r₁_ind != r₂_ind
-				f_radial_0_r₂ = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
-				f_radial_1_r₂ = OffsetArray(zeros(ComplexF64,nr,3),1:nr,-1:1)
-				fℓ′ℓsω_r₂ = OffsetArray(zeros(ComplexF64,nr,2),1:nr,0:1)
+				f_radial_0_r₂ = zeros(ComplexF64,nr,0:1)
+				f_radial_1_r₂ = zeros(ComplexF64,nr,-1:1)
+				fℓ′ℓsω_r₂ = zeros(ComplexF64,nr,0:1)
 			else
 				fℓ′ℓsω_r₂ = view(fℓ′ℓsω_r₁,:,:)
 			end
 
 			# Clebsch Gordan coefficients, indices are (s,η,t)
-			Cℓ′ℓ = OffsetArray(zeros(3,s_max,2),-1:1,1:s_max,-1:0)
+			Cℓ′ℓ = zeros(-1:1,1:s_max,-1:0)
 
-			Dr = dbydr(dr)
+			# Cache bipolar spherical harmonics in a dict on each worker
+			Y12 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
+			Y21 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
 
+			# Loop over the Greenfn files
 			for proc_id in proc_id_range
 
+				fits_time += @elapsed begin
 				Gsrc_file = FITS(joinpath(Gfn_path_src,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
+				end
 
 				# Get a list of (ℓ,ω) in this file
+				parallel_utilities_time += @elapsed begin
 				modes_in_src_Gfn_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
+				end
 
 				for (ℓ,ω_ind) in intersect(ℓ_ωind_iter_on_proc,modes_in_src_Gfn_file)
 
+					parallel_utilities_time += @elapsed begin
 					ℓω_index_Gsrc_file = get_index_in_split_array(modes_in_src_Gfn_file,(ℓ,ω_ind))
+					end
 
-					ω = 2π*ν_arr[ω_ind]
+					ω = dω*(ν_start_zeros + ω_ind)
 		    		
-		    		G = read(Gsrc_file[1],:,:,1:2,1,ℓω_index_Gsrc_file)
+		    		radial_time += @elapsed begin
+		    		
+		    		fits_time += @elapsed begin
+		    		G = read(Gsrc_file[1],:,:,1:2,1,1,ℓω_index_Gsrc_file)
+		    		end
+
 		    		@. Gsrc[:,0] = G[:,1,1] + im*G[:,2,1]
 		    		@. Gsrc[:,1] = G[:,1,2] + im*G[:,2,2]
 		    		G_r₁_rsrc = Gsrc[r₁_ind,0]
 		    		G_r₂_rsrc = Gsrc[r₂_ind,0]
 
-		    		drGsrc[:,0] = Dr*Gsrc[:,0]
-		    		drGsrc[:,1] = Dr*Gsrc[:,1]
+		    		if 0 in K_components
+		    			fits_time += @elapsed begin
+		    			G = read(Gsrc_file[1],:,:,1:2,1,2,ℓω_index_Gsrc_file)
+		    			end
+			    		@. drGsrc[:,0] = G[:,1,1] + im*G[:,2,1]
+			    		@. drGsrc[:,1] = G[:,1,2] + im*G[:,2,2]
+		    		end
+		    		end
+
+		    		G = nothing
 
 				    for ℓ′ in abs(ℓ-s_max):ℓ+s_max
 
@@ -3661,19 +3555,50 @@ module kernel
 				    	end
 
 				    	# ignore line-of-sight projection, just the β=γ=0 component
-				    	Yℓ′ℓ_s0_n1n2 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,x1,x2)
-			    		Yℓ′ℓ_s0_n2n1 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,x2,x1)
+				    	# check if (ℓ′,ℓ) has already been computed
+				    	# We can use the fact that Yℓ′ℓs0(n2,n1) = (-1)^(ℓ+ℓ′+s)Yℓℓ′s0(n1,n2)
+				    	# If we have computed Yℓℓ′s0(n1,n2) already in the previous step,
+				    	# then we can simply read it in from the dictionary
+
+				    	biposh_time += @elapsed begin
+				    	if haskey(Y12,(ℓ′,ℓ))
+				    		Yℓ′ℓ_s0_n1n2 = Y12[(ℓ′,ℓ)]
+				    	elseif haskey(Y21,(ℓ,ℓ′))
+				    		Yℓ′ℓ_s0_n1n2 = Y21[(ℓ,ℓ′)] .* ((-1)^(ℓ+ℓ′+s) for s in axes(Y21[(ℓ,ℓ′)],1))
+				    	else
+				    		# compute and store it
+				    		Yℓ′ℓ_s0_n1n2 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,x1,x2)
+				    		Y12[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n1n2
+				    	end
+				    	
+				    	if haskey(Y21,(ℓ′,ℓ))
+				    		Yℓ′ℓ_s0_n2n1 = Y21[(ℓ′,ℓ)]
+				    	elseif haskey(Y12,(ℓ,ℓ′))
+				    		Yℓ′ℓ_s0_n2n1 = Y12[(ℓ,ℓ′)].* ((-1)^(ℓ+ℓ′+s) for s in axes(Y12[(ℓ,ℓ′)],1))
+				    	else
+				    		Yℓ′ℓ_s0_n2n1 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,x2,x1)
+				    		Y21[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n2n1
+				    	end
+				    	end
 
 			    		# Compute the CG coefficients that appear in fℓ′ℓsω
 			    		for t=-1:0,s in 1:s_max,η=-1:1
 			    			Cℓ′ℓ[η,s,t] = clebschgordan(ℓ′,-η,ℓ,η+t,s,t)
 			    		end
 
+			    		parallel_utilities_time += @elapsed begin
 			    		proc_id_mode_Gobs1,ℓ′ω_index_Gobs1_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,(ℓ′,ω_ind),num_procs_obs1)
+			    		end
+			    		
+			    		fits_time += @elapsed begin
 			    		Gobs1_file = FITS(joinpath(Gfn_path_x1,@sprintf "Gfn_proc_%03d.fits" proc_id_mode_Gobs1),"r")
+			    		end
 						
+						radial_time += @elapsed begin
 	    				# Green functions based at the observation point for ℓ′
-	    				G = read(Gobs1_file[1],:,:,1:2,1,ℓ′ω_index_Gobs1_file)
+	    				fits_time += @elapsed begin
+	    				G = read(Gobs1_file[1],:,:,1:2,1,1,ℓ′ω_index_Gobs1_file)
+	    				end
 			    		@. Gobs1[:,0] = G[:,1,1] + im*G[:,2,1]
 			    		@. Gobs1[:,1] = G[:,1,2] + im*G[:,2,2]
 
@@ -3681,10 +3606,15 @@ module kernel
 
 			    		if r₁_ind != r₂_ind
 
+			    			parallel_utilities_time += @elapsed begin
 			    			proc_id_mode_Gobs2,ℓ′ω_index_Gobs2_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,(ℓ′,ω_ind),num_procs_obs2)
-			    			Gobs2_file = FITS(joinpath(Gfn_path_x2,@sprintf "Gfn_proc_%03d.fits" proc_id_mode_Gobs2),"r")
+			    			end
 
-				    		G = read(Gobs2_file[1],:,:,1:2,1,ℓ′ω_index_Gobs2_file)
+			    			fits_time += @elapsed begin
+			    			Gobs2_file = FITS(joinpath(Gfn_path_x2,@sprintf "Gfn_proc_%03d.fits" proc_id_mode_Gobs2),"r")
+				    		G = read(Gobs2_file[1],:,:,1:2,1,1,ℓ′ω_index_Gobs2_file)
+				    		end
+
 				    		@. Gobs2[:,0] = G[:,1,1] + im*G[:,2,1]
 				    		@. Gobs2[:,1] = G[:,1,2] + im*G[:,2,2]
 
@@ -3694,32 +3624,44 @@ module kernel
 			    		G = nothing
 
 			    		# precompute the radial term in f, α=0
-			    		for η=0:1
-			    			@. f_radial_0_r₁[:,η] = (-1)^η * Gobs1[:,η] * drGsrc[:,η]
-			    			if r₁_ind != r₂_ind
-			    				@. f_radial_0_r₂[:,η] = (-1)^η * Gobs2[:,η] * drGsrc[:,η]
-			    			end
-			    		end
+						if 0 in K_components
+				    		for η=0:1
+				    			@. f_radial_0_r₁[:,η] = (-1)^η * Gobs1[:,η] * drGsrc[:,η]
+				    			if r₁_ind != r₂_ind
+				    				@. f_radial_0_r₂[:,η] = (-1)^η * Gobs2[:,η] * drGsrc[:,η]
+				    			end
+				    		end
+				    	end
 
 			    		# α=1
-			    		for η=-1:1
-			    			@. f_radial_1_r₁[:,η] = (-1)^η * 1/r * Gobs1[:,abs(η)] * 
-			    							( Ω(ℓ,η)*Gsrc[:,abs(η)] - ((η != -1) ? Gsrc[:,abs(η-1)] : 0) )
-			    			if r₁_ind != r₂_ind
-			    				@. f_radial_1_r₂[:,η] = (-1)^η * 1/r * Gobs2[:,abs(η)] * 
-			    							( Ω(ℓ,η)*Gsrc[:,abs(η)] - ((η != -1) ? Gsrc[:,abs(η-1)] : 0) )
-			    			end
-			    		end
+			    		if (-1 in K_components) || (1 in K_components)
+				    		for η=-1:1
+				    			@. f_radial_1_r₁[:,η] = (-1)^η * 1/r * Gobs1[:,abs(η)] * 
+				    							( Ω(ℓ,η)*Gsrc[:,abs(η)] - ((η != -1) ? Gsrc[:,abs(η-1)] : 0) )
+				    			if r₁_ind != r₂_ind
+				    				@. f_radial_1_r₂[:,η] = (-1)^η * 1/r * Gobs2[:,abs(η)] * 
+				    							( Ω(ℓ,η)*Gsrc[:,abs(η)] - ((η != -1) ? Gsrc[:,abs(η-1)] : 0) )
+				    			end
+				    		end
+				    	end
 
+			    		end # timing
+
+			    		sum_over_s_time += @elapsed begin
 			    		for s in LinearIndices(Yℓ′ℓ_s0_n2n1)
 			    			# radial component (for all s)
 			    			
-			    			fℓ′ℓsω_r₁[:,0] .= sum(f_radial_0_r₁[:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1) 
-			    			fℓ′ℓsω_r₁[:,1] .= sum(f_radial_1_r₁[:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
+			    			radial_time += @elapsed begin
+			    			if 0 in K_components
+			    				fℓ′ℓsω_r₁[:,0] .= sum(f_radial_0_r₁[:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1) 
+			    				(r₁_ind != r₂_ind) && fℓ′ℓsω_r₂[:,0] .= sum(f_radial_0_r₂[:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1) 
+			    			end
 
-			    			if r₁_ind != r₂_ind
-			    				fℓ′ℓsω_r₂[:,0] .= sum(f_radial_0_r₂[:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1) 
-			    				fℓ′ℓsω_r₂[:,1] .= sum(f_radial_1_r₂[:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
+			    			if (-1 in K_components) || (1 in K_components)
+			    				fℓ′ℓsω_r₁[:,1] .= sum(f_radial_1_r₁[:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
+			    				(r₁_ind != r₂_ind) && fℓ′ℓsω_r₂[:,1] .= sum(f_radial_1_r₂[:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
+			    			end
+
 			    			end
 
 			    			if isodd(ℓ+ℓ′+s) && -1 in K_components
@@ -3748,43 +3690,340 @@ module kernel
 					     						+ conj(G_r₁_rsrc)*fℓ′ℓsω_r₂[:,1]*Yℓ′ℓ_s0_n2n1[s]) )
 							end
 					    end
-
+						end
 					end
-
 				end
 
 				close(Gsrc_file)
 				
 			end
 
-			return @. 4r^2 * ρ * K
+			radial_time += @elapsed @. K *=  4r^2 * ρ
+
+			end
+
+			# return K
+			return (parallel_utilities_time,fits_time,
+					biposh_time,radial_time,sum_over_s_time,total_proc_time,K)
 		end
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
-		# println("Submitting to workers $procs")
-		# kernel_futures = [@spawnat p sum_modes(rank) for (rank,p) in enumerate(procs)]
 
-		# axes.(fetch.(kernel_futures))
-		# sum(fetch.(kernel_futures))
+		K = zeros(1:nr,K_components,1:s_max)
+		total_time = @elapsed @sync for (rank,p) in enumerate(procs)
+			@async begin
+				
+				fetch_time = @elapsed parallel_utilities_time,fits_time,biposh_time,
+				radial_time,sum_over_s_time,total_proc_time,Ki = fetch(@spawnat p summodes(rank)) 
 
-		Profile.clear()
-		@spawn @profile sum_modes(1)
+				K .+= Ki
+				println(rank," parallel util time ",round(parallel_utilities_time,digits=2),
+					" fits time ",round(fits_time,digits=2),
+					" biposh time ",round(biposh_time,digits=2),
+					" radial time ",round(radial_time,digits=2),
+					" sum s time ",round(sum_over_s_time,digits=2),
+					" total proc time ",round(total_proc_time,digits=2),
+					" fetch time ",round(fetch_time-total_proc_time,digits=2))
+				# K .+= fetch(@spawnat p summodes(rank)) 
+			end
+		end
+		println("Total time ",total_time)
+
+		return K
 	end
 
-	function flow_kernels_srange_t0(n1::Point2D,n2::Point2D,s_max;r_obs=Rsun-75e5,kwargs...)
-		flow_kernels_srange_t0(Point3D(r_obs,n1),Point3D(r_obs,n2),s_max;kwargs...)
+	function flow_kernels_srange_t0(n1::Point2D,n2::Point2D,s_max;
+		ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,r_src=Rsun-75e5,r_obs=Rsun-75e5,K_components=-1:1)
+
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		Gfn_path_obs = Gfn_path_from_source_radius(r_obs)
+
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs dν ν_start_zeros
+
+		num_procs_obs = load(joinpath(Gfn_path_obs,"parameters.jld2"),"num_procs")
+
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		
+		h_ω_arr = h(n1,n2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src,r_obs=r_obs).h_ω[ν_start_zeros .+ ν_ind_range] # only in range
+
+		r_obs_ind = argmin(abs.(r .- r_obs))
+
+		dω = dν*2π
+
+		function summodes(rank)
+
+			parallel_utilities_time = 0.0
+			fits_init_time = 0.0
+			fits_read_time = 0.0
+			biposh_time = 0.0
+			radial_time = 0.0
+			sum_over_s_time = 0.0
+			total_proc_time = 0.0
+
+			total_proc_time += @elapsed begin
+		
+			parallel_utilities_time += @elapsed begin
+			ℓ_ωind_iter_on_proc = collect(split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank))
+			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
+			end
+
+			# Get a list of all modes that will be accessed.
+			# This can be used to open the fits files before the loops begin.
+			# This will cut down on FITS IO costs
+
+			# Gℓ′ω(r,robs) files
+			first_mode = first(ℓ_ωind_iter_on_proc)
+			last_mode = last(ℓ_ωind_iter_on_proc)
+			ℓ′_min_first_mode = max(minimum(ℓ_arr),abs(first_mode[1]-s_max))
+			ℓ′_max_last_mode = min(maximum(ℓ_arr),last_mode[1]+s_max)
+			proc_id_min_Gobs = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
+									(ℓ′_min_first_mode,first_mode[2]),num_procs_obs)
+			proc_id_max_Gobs = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
+									(ℓ′_max_last_mode,last_mode[2]),num_procs_obs)
+
+			fits_init_time += @elapsed begin
+			Gobs_files = Dict{Int64,FITS}(procid=>FITS(joinpath(Gfn_path_obs,
+							@sprintf "Gfn_proc_%03d.fits" procid),"r") 
+							for procid in proc_id_min_Gobs:proc_id_max_Gobs)
+			end
+
+			K = zeros(nr,minimum(K_components):maximum(K_components),1:s_max)
+
+			Gsrc = zeros(ComplexF64,nr,0:1)
+			drGsrc = zeros(ComplexF64,nr,0:1)
+			Gobs = zeros(ComplexF64,nr,0:1)
+
+			# temporary array to precompute the radial part, indices are (r,η)
+			f_radial_0_robs = zeros(ComplexF64,nr,0:1) # the η=-1 and η=1 terms are identical
+			f_radial_1_robs = zeros(ComplexF64,nr,-1:1)
+			fℓ′ℓsω_robs = zeros(ComplexF64,nr,0:1)
+
+			# Clebsch Gordan coefficients, indices are (s,η,t)
+			Cℓ′ℓ = zeros(-1:1,1:s_max,-1:0)
+
+			# Cache bipolar spherical harmonics in a dict on each worker
+			Y12 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
+			Y21 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
+
+			# Loop over the Greenfn files
+			for proc_id in proc_id_range_Gsrc
+
+				fits_init_time += @elapsed begin
+				Gsrc_file = FITS(joinpath(Gfn_path_src,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
+				end
+
+				# Get a list of (ℓ,ω) in this file
+				parallel_utilities_time += @elapsed begin
+				modes_in_src_Gfn_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
+				end
+
+				for (ℓ,ω_ind) in intersect(ℓ_ωind_iter_on_proc,modes_in_src_Gfn_file)
+
+					parallel_utilities_time += @elapsed begin
+					ℓω_index_Gsrc_file = get_index_in_split_array(modes_in_src_Gfn_file,(ℓ,ω_ind))
+					end
+
+					ω = dω*(ν_start_zeros + ω_ind)
+		    		
+		    		radial_time += @elapsed begin
+		    		
+		    		fits_read_time += @elapsed begin
+		    		G = read(Gsrc_file[1],:,:,1:2,1,1,ℓω_index_Gsrc_file)
+		    		end
+
+		    		@. Gsrc[:,0] = G[:,1,1] + im*G[:,2,1]
+		    		@. Gsrc[:,1] = G[:,1,2] + im*G[:,2,2]
+		    		G_robs_rsrc = Gsrc[r_obs_ind,0]
+
+		    		if 0 in K_components
+		    			fits_read_time += @elapsed begin
+		    			G = read(Gsrc_file[1],:,:,1:2,1,2,ℓω_index_Gsrc_file)
+		    			end
+			    		@. drGsrc[:,0] = G[:,1,1] + im*G[:,2,1]
+			    		@. drGsrc[:,1] = G[:,1,2] + im*G[:,2,2]
+		    		end
+		    		end
+
+		    		G = nothing
+
+		    		ℓ′_range = intersect(ℓ_arr,abs(ℓ-s_max):ℓ+s_max)
+
+		    		# open the fits files required
+
+				    for ℓ′ in ℓ′_range
+
+				    	# ignore line-of-sight projection, just the β=γ=0 component
+				    	# check if (ℓ′,ℓ) has already been computed
+				    	# We can use the fact that Yℓ′ℓs0(n2,n1) = (-1)^(ℓ+ℓ′+s)Yℓℓ′s0(n1,n2)
+				    	# If we have computed Yℓℓ′s0(n1,n2) already in the previous step,
+				    	# then we can simply read it in from the dictionary
+
+				    	biposh_time += @elapsed begin
+				    	if haskey(Y12,(ℓ′,ℓ))
+				    		Yℓ′ℓ_s0_n1n2 = Y12[(ℓ′,ℓ)]
+				    	elseif haskey(Y21,(ℓ,ℓ′))
+				    		Yℓ′ℓ_s0_n1n2 = Y21[(ℓ,ℓ′)] .* ((-1)^(ℓ+ℓ′+s) for s in axes(Y21[(ℓ,ℓ′)],1))
+				    	else
+				    		# compute and store it
+				    		Yℓ′ℓ_s0_n1n2 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,n1,n2)
+				    		Y12[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n1n2
+				    	end
+				    	
+				    	if haskey(Y21,(ℓ′,ℓ))
+				    		Yℓ′ℓ_s0_n2n1 = Y21[(ℓ′,ℓ)]
+				    	elseif haskey(Y12,(ℓ,ℓ′))
+				    		Yℓ′ℓ_s0_n2n1 = Y12[(ℓ,ℓ′)].* ((-1)^(ℓ+ℓ′+s) for s in axes(Y12[(ℓ,ℓ′)],1))
+				    	else
+				    		Yℓ′ℓ_s0_n2n1 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,n2,n1)
+				    		Y21[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n2n1
+				    	end
+				    	end
+
+			    		# Compute the CG coefficients that appear in fℓ′ℓsω
+			    		for t=-1:0,s in 1:s_max,η=-1:1
+			    			Cℓ′ℓ[η,s,t] = clebschgordan(ℓ′,-η,ℓ,η+t,s,t)
+			    		end
+
+			    		parallel_utilities_time += @elapsed begin
+			    		proc_id_mode_Gobs,ℓ′ω_index_Gobs_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,(ℓ′,ω_ind),num_procs_obs)
+			    		end
+			    		
+			    		# fits_init_time += @elapsed begin
+			    		# # Gobs_file = FITS(joinpath(Gfn_path_obs,@sprintf "Gfn_proc_%03d.fits" proc_id_mode_Gobs),"r")
+			    		# Gobs_file = Gobs_files[proc_id_mode_Gobs]
+			    		# end
+						
+						radial_time += @elapsed begin
+	    				# Green functions based at the observation point for ℓ′
+	    				fits_read_time += @elapsed begin
+	    				G = read(Gobs_files[proc_id_mode_Gobs][1],:,:,1:2,1,1,ℓ′ω_index_Gobs_file)
+	    				end
+			    		@. Gobs[:,0] = G[:,1,1] + im*G[:,2,1]
+			    		@. Gobs[:,1] = G[:,1,2] + im*G[:,2,2]
+
+			    		# fits_init_time += @elapsed close(Gobs_file)
+
+			    		G = nothing
+
+			    		# precompute the radial term in f, α=0
+			    		if 0 in K_components
+				    		for η=0:1
+				    			@. f_radial_0_robs[:,η] = (-1)^η * Gobs[:,η] * drGsrc[:,η]
+				    		end
+			    		end
+
+			    		# α=1
+			    		if (-1 in K_components) || (1 in K_components)
+				    		for η=-1:1
+				    			@. f_radial_1_robs[:,η] = (-1)^η * 1/r * Gobs[:,abs(η)] * 
+				    				( Ω(ℓ,η)*Gsrc[:,abs(η)] - ((η != -1) ? Gsrc[:,abs(η-1)] : 0) )
+				    		end
+				    	end
+
+			    		end # timing
+
+			    		sum_over_s_time += @elapsed begin
+			    		for s in LinearIndices(Yℓ′ℓ_s0_n2n1)
+			    			# radial component (for all s)
+			    			
+			    			radial_time += @elapsed begin
+
+			    			if 0 in K_components
+			    				fℓ′ℓsω_robs[:,0] .= sum(f_radial_0_robs[:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1) 
+			    			end
+
+			    			if (-1 in K_components) || (1 in K_components)
+			    				fℓ′ℓsω_robs[:,1] .= sum(f_radial_1_robs[:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
+			    			end
+
+			    			end # timing
+
+			    			if isodd(ℓ+ℓ′+s) && -1 in K_components
+			    				# tangential - component (K⁺ - K⁻), only for odd l+l′+s
+								# only imag part calculated, the actual kernel is iK
+								# extra factor of 2 from the (1 - (-1)^(ℓ+ℓ′+s)) term
+								@. K[:,-1,s] += 2 * dω/2π * ω^3 * Powspec(ω) * Nℓ′ℓs(ℓ′,ℓ,s) * 
+					     					real(conj(h_ω_arr[ω_ind]) *
+					     					(conj(fℓ′ℓsω_robs[:,1])*G_robs_rsrc*conj(Yℓ′ℓ_s0_n1n2[s]) 
+					     						+ conj(G_robs_rsrc)*fℓ′ℓsω_robs[:,1]*Yℓ′ℓ_s0_n2n1[s]) )
+			    			end
+
+			    			if 0 in K_components
+						     	@. K[:,0,s] +=  dω/2π * ω^3 * Powspec(ω) * Nℓ′ℓs(ℓ′,ℓ,s) * 
+						     					real(conj(h_ω_arr[ω_ind]) *
+						     					(conj(fℓ′ℓsω_robs[:,0])*G_robs_rsrc*conj(Yℓ′ℓ_s0_n1n2[s]) 
+						     						+ conj(G_robs_rsrc)*fℓ′ℓsω_robs[:,0]*Yℓ′ℓ_s0_n2n1[s]) )
+						    end
+							
+							if iseven(ℓ+ℓ′+s) && 1 in K_components
+								# tangential + component (K⁺ + K⁻), only for even l+l′+s
+								# extra factor of 2 from the (1 + (-1)^(ℓ+ℓ′+s)) term
+								@. K[:,1,s] +=  2 * dω/2π * ω^3 * Powspec(ω) * Nℓ′ℓs(ℓ′,ℓ,s) * 
+					     					real(conj(h_ω_arr[ω_ind]) *
+					     					(conj(fℓ′ℓsω_robs[:,1])*G_robs_rsrc*conj(Yℓ′ℓ_s0_n1n2[s]) 
+					     						+ conj(G_robs_rsrc)*fℓ′ℓsω_robs[:,1]*Yℓ′ℓ_s0_n2n1[s]) )
+							end
+					    end
+						end
+					end
+				end
+
+				fits_init_time += @elapsed close(Gsrc_file)
+				
+			end
+
+			radial_time += @elapsed @. K *=  4r^2 * ρ
+
+			end
+
+			fits_init_time += @elapsed begin
+			for (procid,fitsfile) in Gobs_files
+				close(fitsfile)
+			end
+			end
+
+			# return K
+			return (parallel_utilities_time,fits_init_time,fits_read_time,
+					biposh_time,radial_time,sum_over_s_time,total_proc_time,K)
+		end
+
+		procs = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs)
+
+		K = zeros(1:nr,K_components,1:s_max)
+		total_time = @elapsed @sync for (rank,p) in enumerate(procs)
+			@async begin
+				
+				fetch_time = @elapsed parallel_utilities_time,fits_init_time,fits_read_time,
+				biposh_time,radial_time,sum_over_s_time,total_proc_time,Ki = fetch(@spawnat p summodes(rank)) 
+
+				K .+= Ki
+				println(rank," parallel util time ",round(parallel_utilities_time,digits=2),
+					" fits init time ",round(fits_init_time,digits=2),
+					" fits read time ",round(fits_read_time,digits=2),
+					" biposh time ",round(biposh_time,digits=2),
+					" radial time ",round(radial_time,digits=2),
+					" sum s time ",round(sum_over_s_time,digits=2),
+					" total proc time ",round(total_proc_time,digits=2),
+					" fetch time ",round(fetch_time-total_proc_time,digits=2))
+				# K .+= fetch(@spawnat p summodes(rank)) 
+			end
+		end
+		println("Total time ",total_time)
+
+		return K
 	end
 
 	function meridional_flow_stream_function_kernel_srange(x1::SphericalPoint,x2::SphericalPoint,s_max;kwargs...)
 		Kv = flow_kernels_srange_t0(x1,x2,s_max;K_components=0:1,kwargs...)
-		Dr = dbydr(dr)
 
 		Kψ_imag = zeros(nr,s_max)
 
 		# negative of the imaginary part of the stream function kernel
-		for s in 1:s_max
-			Kψ_imag[:,s] .= Dr*(Kv[:,1,s] ./ρ) .+ Kv[:,1,s]./(ρ.*r) .- 2 .*Ω(s,0).*Kv[:,0,s]./(ρ.*r)
+		@inbounds for s in axes(Kψ_imag,2)
+			Kψ_imag[:,s] .= ddr*(Kv[:,1,s] ./ρ) .+ Kv[:,1,s]./(ρ.*r) .- 2 .*Ω(s,0).*Kv[:,0,s]./(ρ.*r)
 		end
 
 		return (-im).*Kψ_imag

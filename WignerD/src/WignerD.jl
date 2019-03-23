@@ -1,9 +1,6 @@
 module WignerD
 using OffsetArrays, WignerSymbols, LinearAlgebra,Libdl
 
-# using PyCall
-# @pyimport pyshtools.utils as SHTools
-
 using PointsOnASphere
 
 function djmatrix(j,θ;m_range=-j:j,n_range=-j:j)
@@ -27,17 +24,15 @@ function djmatrix(j,θ;m_range=-j:j,n_range=-j:j)
 	# check if symmetry conditions allow the index to be evaluated
 	inds_covered = OffsetArray(falses(size(dj)...),axes(dj)...)
 
-	for (m,n) in Base.Iterators.product(axes(dj)...)
+	@inbounds for (m,n) in Base.Iterators.product(axes(dj)...)
 
-		if inds_covered[m,n]
-			continue
-		end
+		inds_covered[m,n] && continue
 
 		dj_m_n = zero(ComplexF64)
 		dj_m_n_πmθ = zero(ComplexF64)
 		dj_n_m = zero(ComplexF64)
 
-		for 𝑈 in axes(λ,1)
+		@inbounds for 𝑈 in axes(λ,1)
 			dj_m_n += cis(-λ[𝑈]*θ) * v[𝑈,m] * conj(v[𝑈,n])
 			if m != n
 				dj_n_m += cis(-λ[𝑈]*(-θ)) * v[𝑈,m] * conj(v[𝑈,n])
@@ -47,36 +42,30 @@ function djmatrix(j,θ;m_range=-j:j,n_range=-j:j)
 			
 		end
 
-		# println("1 $m $n $(m) $(n)")
 		dj[m,n] = real(dj_m_n)
 		inds_covered[m,n] = true
-		if ! iszero(m) && -m in m_range
-			# println("2 $m $n $(-m) $(n)")
+		if !iszero(m) && -m in m_range
 			dj[-m,n] = real(dj_m_n_πmθ)*(-1)^(j+n)
 			inds_covered[-m,n] = true
 		end
 
-		if ! iszero(n) && -n in n_range
-			# println("3 $m $n $(m) $(-n)")
+		if !iszero(n) && -n in n_range
 			dj[m,-n] = real(dj_m_n_πmθ)*(-1)^(j+m)
 			inds_covered[m,-n] = true
 		end
 
 		if !(iszero(m) && iszero(n)) && -m in n_range && -n in m_range
-			# println("4 $m $n $(-n) $(-m)")
 			dj[-n,-m] = real(dj_m_n)
 			inds_covered[-n,-m] = true
 		end
 
 		if  !iszero(n) && m !=n && -n in n_range && -m in m_range
-			# println("5 $m $n $(-m) $(-n)")
 			dj[-m,-n] = (-1)^(n+m) * real(dj_m_n)
 			inds_covered[-m,-n] = true
 		end
 
 		# transpose
 		if m != n && m in n_range && n in m_range
-			# println("6 $m $n $(n) $(m)")
 			dj[n,m] = real(dj_n_m)
 			inds_covered[n,m] = true
 		end
@@ -85,6 +74,8 @@ function djmatrix(j,θ;m_range=-j:j,n_range=-j:j)
 
 	return dj
 end
+
+precompile(djmatrix,(Int64,Float64))
 
 djmatrix(j,m,n,θ) = djmatrix(j,θ,m_range=m:m,n_range=n:n)
 
@@ -98,37 +89,42 @@ function Ylmatrix(l,(θ,ϕ)::Tuple{<:Real,<:Real};m_range=-l:l,n_range=-1:1)
 
 	Y = OffsetArray{ComplexF64}(undef,axes(dj_θ)...)
 
-	for (m,n) in Base.Iterators.product(axes(dj_θ)...)
+	@inbounds for (m,n) in Base.Iterators.product(axes(dj_θ)...)
 		Y[m,n] = √((2l+1)/4π) * dj_θ[m,n] * cis(m*ϕ)
 	end
 	return Y
 end
 
+precompile(Ylmatrix,(Int64,Tuple{Float64,Float64}))
+precompile(Ylmatrix,(Int64,Tuple{Int64,Float64}))
+precompile(Ylmatrix,(Int64,Tuple{Float64,Int64}))
+precompile(Ylmatrix,(Int64,Tuple{Int64,Int64}))
+
 Ylmatrix(l,n::SphericalPoint;m_range=-l:l,n_range=-1:1) = Ylmatrix(l,(n.θ,n.ϕ);m_range=m_range,n_range=n_range)
 
 X(j,n) = sqrt((j+n)*(j-n+1))
 
+for (T1,T2) in Base.Iterators.product((Int64,Float64),(Int64,Float64))
+	precompile(X,(T2,T2))
+end
+
 function coeffi(j)
 	N = 2j+1
 	A = zeros(ComplexF64,N,N)
-	# upper_diagonal = zeros(ComplexF64,N-1)
 
 	A[1,2]=-X(j,-j+1)/2im
-	# upper_diagonal[1] = -X(j,-j+1)/2im
     A[N,N-1]=X(j,-j+1)/2im
 
-    for i in 2:N-1
-    	# upper_diagonal[i] = -X(j,-j+i)/2im
+    @inbounds for i in 2:N-1
 	    A[i,i+1]=-X(j,-j+i)/2im
 	    A[i,i-1]=X(j,j-i+2)/2im
 	end
 
-	# A = Hermitian(BandedMatrix(1=>upper_diagonal))
-
 	return Hermitian(A)
-
-	# return Hermitian(collect(A))
 end
+
+precompile(coeffi,(Int64,))
+precompile(coeffi,(Float64,))
 
 
 ##################################################################################################
@@ -139,11 +135,11 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s::Integer,β::Integer,γ::Integer,(θ₁,ϕ₁
 	Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁),n_range=β:β)
 	Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂),n_range=γ:γ)
 	@assert(δ(ℓ₁,ℓ₂,s),"|ℓ₁-ℓ₂|<=s<=ℓ₁+ℓ₂ not satisfied")
-	m_max = min(ℓ₁,ℓ₂)
+	m_max = min(ℓ₁,ℓ₂) ::Integer
 
-	Y_BSH = OffsetArray(zeros(ComplexF64,1,1,1),s:s,β:β,γ:γ)
+	Y_BSH = zeros(ComplexF64,s:s,β:β,γ:γ)
 
-	for m in -m_max:m_max
+	@inbounds for m in -m_max:m_max
 		Y_BSH[s,β,γ] += clebschgordan(ℓ₁,m,ℓ₂,-m,s,0)*Y_ℓ₁[m,β]*Y_ℓ₂[-m,γ]
 	end
 
@@ -160,7 +156,7 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,
 	s_valid = abs(ℓ₁-ℓ₂):ℓ₁+ℓ₂
 	s_intersection = intersect(s_range,s_valid)
 
-	Y_BSH = OffsetArray(zeros(ComplexF64,length(s_intersection),1,1),s_intersection,β:β,γ:γ)
+	Y_BSH = zeros(ComplexF64,s_intersection,β:β,γ:γ)
 
 	lib = nothing
 
@@ -169,12 +165,12 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,
 		wig3j_fn_ptr=Libdl.dlsym(lib,:wigner3j_wrapper)
 	end
 
-	for m in -m_max:m_max
+	@inbounds for m in -m_max:m_max
 		CG = CG_ℓ₁mℓ₂nst(ℓ₁,m,ℓ₂;wig3j_fn_ptr=wig3j_fn_ptr)
 
 		s_intersection = intersect(axes(Y_BSH,1),axes(CG,1))
 		
-		for s in s_intersection
+		@inbounds  for s in s_intersection
 			Y_BSH[s,β,γ] += CG[s]*Y_ℓ₁[m,β]*Y_ℓ₂[-m,γ]
 		end
 	end
@@ -193,9 +189,9 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s::Integer,(θ₁,ϕ₁)::Tuple{<:Real,<:Real},
 	@assert(δ(ℓ₁,ℓ₂,s),"|ℓ₁-ℓ₂|<=s<=ℓ₁+ℓ₂ not satisfied")
 	m_max = min(ℓ₁,ℓ₂)
 
-	Y_BSH = OffsetArray(zeros(ComplexF64,1,3,3),s:s,-1:1,-1:1)
+	Y_BSH = zeros(ComplexF64,s:s,-1:1,-1:1)
 
-	for (s,β,γ) in Iterators.product(axes(Y_BSH)...),m in -m_max:m_max
+	@inbounds for (s,β,γ) in Iterators.product(axes(Y_BSH)...),m in -m_max:m_max
 		Y_BSH[s,β,γ] += clebschgordan(ℓ₁,m,ℓ₂,-m,s,0)*Y_ℓ₁[m,β]*Y_ℓ₂[-m,γ]
 	end
 
@@ -210,7 +206,7 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:R
 	s_valid = abs(ℓ₁-ℓ₂):ℓ₁+ℓ₂
 	s_intersection = intersect(s_valid,s_range)
 
-	Y_BSH = OffsetArray(zeros(ComplexF64,length(s_intersection),3,3),s_intersection,-1:1,-1:1)
+	Y_BSH = zeros(ComplexF64,s_intersection,-1:1,-1:1)
 
 	lib = nothing
 
@@ -219,12 +215,12 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:R
 		wig3j_fn_ptr=Libdl.dlsym(lib,:wigner3j_wrapper)
 	end
 
-	for m in -m_max:m_max
+	@inbounds  for m in -m_max:m_max
 		CG = CG_ℓ₁mℓ₂nst(ℓ₁,m,ℓ₂;wig3j_fn_ptr=wig3j_fn_ptr)
 
 		s_intersection = intersect(axes(Y_BSH,1),axes(CG,1))
 
-		for (s,β,γ) in Iterators.product(s_intersection,axes(Y_BSH)[2:3]...)
+		@inbounds for (s,β,γ) in Iterators.product(s_intersection,axes(Y_BSH)[2:3]...)
 			Y_BSH[s,β,γ] += CG[s]*Y_ℓ₁[m,β]*Y_ℓ₂[-m,γ]
 		end
 	end
@@ -242,15 +238,14 @@ BiPoSH_s0(ℓ₁,ℓ₂,s,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH_s0(ℓ
 
 # Any t
 
-struct BSH
+struct BSH{N}
 	smin :: Int64
 	smax :: Int64
-	arr :: OffsetArray{ComplexF64}
+	arr :: OffsetArray{ComplexF64,N,Array{ComplexF64,N}}
 end
 
 function BSH(smin::Integer,smax::Integer,args...) 
-	Y = BSH(smin,smax,zeros(ComplexF64,1:((smax+1)^2-smin^2),args...))
-	return Y
+	BSH(smin,smax,zeros(ComplexF64,1:((smax+1)^2-smin^2),args...))
 end
 
 BSH(s_range::UnitRange{<:Integer},args...) = BSH(first(s_range),last(s_range),
@@ -273,10 +268,9 @@ function BiPoSH(ℓ₁,ℓ₂,s::Integer,t::Integer,β::Integer,γ::Integer,
 	@assert(δ(ℓ₁,ℓ₂,s),"|ℓ₁-ℓ₂|<=s<=ℓ₁+ℓ₂ not satisfied")
 	@assert(abs(t)<=s,"abs(t)<=s not satisfied")
 
-	# Y_BSH = OffsetArray{ComplexF64}(undef,s:s,t:t,β:β,γ:γ)
 	Y_BSH = BSH(s:s,β:β,γ:γ)
 
-	for m in -ℓ₁:ℓ₁
+	@inbounds for m in -ℓ₁:ℓ₁
 		n = t - m
 		if abs(n) > ℓ₂
 			continue
@@ -334,7 +328,6 @@ function BiPoSH(ℓ₁,ℓ₂,s::Integer,t::Integer,(θ₁,ϕ₁)::Tuple{<:Real,
 	@assert(δ(ℓ₁,ℓ₂,s),"|ℓ₁-ℓ₂|<=s<=ℓ₁+ℓ₂ not satisfied")
 	@assert(abs(t)<=s,"abs(t)<=s not satisfied")
 
-	# Y_BSH = OffsetArray(zeros(ComplexF64,1,3,3),s:s,-1:1,-1:1)
 	Y_BSH = BSH(s:s,-1:1,-1:1)
 
 	for β=-1:1,γ=-1:1
@@ -442,7 +435,8 @@ function Wigner3j!(w3j,j2,j3,m2,m3;wig3j_fn_ptr=nothing)
 	j2,j3 = Int32(j2),Int32(j3)
 	len = Int32(j2+j3+1)
 
-	@assert(length(w3j)>=len,"length of output array must be atleast j2+j3+1=$(j2+j3+1)")
+	@assert(length(w3j)>=len,"length of output array must be atleast j2+j3+1=$(j2+j3+1),"*
+							" supplied output array has a length of $(length(w3j))")
 
 	exitstatus = zero(Int32)
 
@@ -477,7 +471,7 @@ function CG_ℓ₁mℓ₂nst(ℓ₁,m,ℓ₂,t=0;wig3j_fn_ptr=nothing)
 	smax = ℓ₁ + ℓ₂
 	w = Wigner3j(ℓ₁,ℓ₂,m,n;wig3j_fn_ptr=wig3j_fn_ptr)
 	CG = OffsetArray(w[1:(smax-smin+1)],smin:smax)
-	for s in axes(CG,1)
+	@inbounds for s in axes(CG,1)
 		CG[s] *= √(2s+1)*(-1)^(ℓ₁-ℓ₂)
 	end
 	return CG
