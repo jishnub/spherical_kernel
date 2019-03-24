@@ -21,7 +21,7 @@ function plot_traveltimes_validation(;nϕ=10,ℓ_range=20:100,bounce_no=1)
 	xlabel("angular separation [degrees]",fontsize=12)
 	ylabel("δτ [sec]",fontsize=12)
 	legend(loc="best")
-	# savefig("traveltimes_validation.png")
+	savefig("traveltimes_validation.png")
 
 	dτ_arr = hcat(ϕ2_deg,δτ_FB,δτ_rot2,(δτ_rot2-δτ_FB)./δτ_rot2.*100)
 
