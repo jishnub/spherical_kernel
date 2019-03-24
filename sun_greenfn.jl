@@ -19,10 +19,8 @@ module parallel_utilities
 	end
 
 	function split_across_processors(arr₁,num_procs=nworkers(),proc_id=worker_rank())
-		if isnothing(proc_id)
-			return []
-		end
 
+		@assert(proc_id<=num_procs,"processor rank has to be less than number of workers engaged")
 		if num_procs == 1
 			return arr₁
 		end
@@ -118,8 +116,20 @@ module parallel_utilities
 	workers_active(arr₁,arr₂) = [p for (rank,p) in enumerate(workers()) 
 								if !isempty(split_product_across_processors(arr₁,arr₂,nworkers(),rank))]
 
+	function minmax_from_split_array(ℓ_ωind_iter)
+		ℓ_min,ω_ind_min = first(ℓ_ωind_iter)
+		ℓ_max,ω_ind_max = ℓ_min,ω_ind_min
+		for (ℓ,ω_ind) in ℓ_ωind_iter
+			ℓ_min = min(ℓ_min,ℓ)
+			ℓ_max = max(ℓ_max,ℓ)
+			ω_ind_min = min(ω_ind_min,ω_ind)
+			ω_ind_max = max(ω_ind_max,ω_ind)
+		end
+		return (ℓ_min=ℓ_min,ℓ_max=ℓ_max,ω_ind_min=ω_ind_min,ω_ind_max=ω_ind_max)
+	end
+
 	export split_product_across_processors,get_processor_id_from_split_array,get_processor_range_from_split_array,workers_active
-	export get_index_in_split_array,procid_and_mode_index
+	export get_index_in_split_array,procid_and_mode_index,minmax_from_split_array
 end
 
 ###########################################################################################
@@ -2852,9 +2862,7 @@ module kernel
 	@reexport using Main.crosscov
 	@pyimport scipy.integrate as integrate
 	import WignerSymbols: clebschgordan
-	using WignerD
-	using FileIO
-	using Profile
+	using Libdl, WignerD, FileIO, Profile
 
 	################################################################################################################
 	# Validation for uniform rotation
@@ -3761,33 +3769,41 @@ module kernel
 			radial_time = 0.0
 			sum_over_s_time = 0.0
 			total_proc_time = 0.0
+			mode_related_stuff_time = 0.0
 
 			total_proc_time += @elapsed begin
 		
 			parallel_utilities_time += @elapsed begin
-			ℓ_ωind_iter_on_proc = collect(split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank))
+			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
-			end
+			end # parallel_utilities_time
 
 			# Get a list of all modes that will be accessed.
 			# This can be used to open the fits files before the loops begin.
 			# This will cut down on FITS IO costs
 
 			# Gℓ′ω(r,robs) files
+			mode_related_stuff_time += @elapsed begin
 			first_mode = first(ℓ_ωind_iter_on_proc)
-			last_mode = last(ℓ_ωind_iter_on_proc)
+			last_mode = last(collect(ℓ_ωind_iter_on_proc))
 			ℓ′_min_first_mode = max(minimum(ℓ_arr),abs(first_mode[1]-s_max))
 			ℓ′_max_last_mode = min(maximum(ℓ_arr),last_mode[1]+s_max)
+			ℓ_max_proc = minmax_from_split_array(ℓ_ωind_iter_on_proc).ℓ_max
+			ℓ′_max_proc =  ℓ_max_proc + s_max
+			end # mode_related_stuff_time
+			
+			parallel_utilities_time += @elapsed begin
 			proc_id_min_Gobs = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
 									(ℓ′_min_first_mode,first_mode[2]),num_procs_obs)
 			proc_id_max_Gobs = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
 									(ℓ′_max_last_mode,last_mode[2]),num_procs_obs)
+			end #parallel_utilities_time
 
 			fits_init_time += @elapsed begin
 			Gobs_files = Dict{Int64,FITS}(procid=>FITS(joinpath(Gfn_path_obs,
 							@sprintf "Gfn_proc_%03d.fits" procid),"r") 
 							for procid in proc_id_min_Gobs:proc_id_max_Gobs)
-			end
+			end # fits_init_time
 
 			K = zeros(nr,minimum(K_components):maximum(K_components),1:s_max)
 
@@ -3803,9 +3819,34 @@ module kernel
 			# Clebsch Gordan coefficients, indices are (s,η,t)
 			Cℓ′ℓ = zeros(-1:1,1:s_max,-1:0)
 
+			biposh_time += @elapsed begin
+			# cache Ylmn arrays to speed up computation of BiPoSH_s0
+			# Create an OffsetArray of the Ylmn OffsetArrays
+			T = OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
+			Yℓ′_n1_arr = OffsetArray{T}(undef,-s_max:s_max)
+    		Yℓ′_n2_arr = OffsetArray{T}(undef,-s_max:s_max)
+    		# The array indices will be ℓ′-ℓ values to ensure that we can 
+    		# overwrite the preallocated arrays
+    		
+    		for ind in eachindex(Yℓ′_n1_arr)
+    			Yℓ′_n1_arr[ind] = zeros(ComplexF64,-ℓ′_max_proc:ℓ′_max_proc,0:0)
+    		end
+
+    		for ind in eachindex(Yℓ′_n2_arr)
+    			Yℓ′_n2_arr[ind] = zeros(ComplexF64,-ℓ′_max_proc:ℓ′_max_proc,0:0)
+    		end
+
 			# Cache bipolar spherical harmonics in a dict on each worker
 			Y12 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
 			Y21 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
+
+			end #biposh_time
+
+			# keep track of ℓ to cache Yℓ′ by rolling arrays
+			# if ℓ changes by 1 arrays can be rolled
+			# if the ℓ wraps back then δℓ will be negative. 
+			# In this case we need to recompute the Yℓ′ arrays
+			mode_related_stuff_time += @elapsed ℓ_prev = first(ℓ_ωind_iter_on_proc)[1]
 
 			# Loop over the Greenfn files
 			for proc_id in proc_id_range_Gsrc
@@ -3850,7 +3891,39 @@ module kernel
 
 		    		ℓ′_range = intersect(ℓ_arr,abs(ℓ-s_max):ℓ+s_max)
 
-		    		# open the fits files required
+		    		# Precompute Ylmatrix to speed up evaluation of BiPoSH_s0
+		    		biposh_time += @elapsed begin
+		    		Yℓ_n2 = Ylmatrix(ℓ,n2,n_range=0:0)
+		    		Yℓ_n1 = Ylmatrix(ℓ,n1,n_range=0:0)    
+
+		    		if (ℓ - ℓ_prev) == 1
+			    		# roll the Yℓ′ arrays
+			    		for ind in first(ℓ′_range)-ℓ:last(ℓ′_range)-ℓ-1
+			    			@. Yℓ′_n1_arr[ind] = Yℓ′_n1_arr[ind+1]
+			    		end
+
+			    		for ind in first(ℓ′_range)-ℓ:last(ℓ′_range)-ℓ-1
+			    			@. Yℓ′_n2_arr[ind] = Yℓ′_n2_arr[ind+1]
+			    		end
+
+			    		Y = Ylmatrix(last(ℓ′_range),n1,n_range=0:0)
+		    			Yℓ′_n1_arr[last(ℓ′_range)-ℓ][axes(Y)...] = Y
+			    		Y = Ylmatrix(last(ℓ′_range),n2,n_range=0:0)
+			    		Yℓ′_n2_arr[last(ℓ′_range)-ℓ][axes(Y)...] = Y
+				    	
+			    	else
+			    		# re-initialize the Yℓ′ arrays
+			    		for ℓ′ in ℓ′_range
+			    			Y = Ylmatrix(ℓ′,n1,n_range=0:0)
+			    			Yℓ′_n1_arr[ℓ′-ℓ][axes(Y)...] = Y
+			    			Y = Ylmatrix(ℓ′,n2,n_range=0:0)
+			    			Yℓ′_n2_arr[ℓ′-ℓ][axes(Y)...] = Y
+			    		end
+			    	end
+
+			    	end #timing
+
+			    	ℓ_prev=ℓ
 
 				    for ℓ′ in ℓ′_range
 
@@ -3867,7 +3940,8 @@ module kernel
 				    		Yℓ′ℓ_s0_n1n2 = Y21[(ℓ,ℓ′)] .* ((-1)^(ℓ+ℓ′+s) for s in axes(Y21[(ℓ,ℓ′)],1))
 				    	else
 				    		# compute and store it
-				    		Yℓ′ℓ_s0_n1n2 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,n1,n2)
+				    		Yℓ′ℓ_s0_n1n2 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,n1,n2,Y_ℓ₂=Yℓ_n2,
+				    						Y_ℓ₁=Yℓ′_n1_arr[ℓ′-ℓ])
 				    		Y12[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n1n2
 				    	end
 				    	
@@ -3876,7 +3950,8 @@ module kernel
 				    	elseif haskey(Y12,(ℓ,ℓ′))
 				    		Yℓ′ℓ_s0_n2n1 = Y12[(ℓ,ℓ′)].* ((-1)^(ℓ+ℓ′+s) for s in axes(Y12[(ℓ,ℓ′)],1))
 				    	else
-				    		Yℓ′ℓ_s0_n2n1 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,n2,n1)
+				    		Yℓ′ℓ_s0_n2n1 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,n2,n1,Y_ℓ₂=Yℓ_n1,
+				    						Y_ℓ₁=Yℓ′_n2_arr[ℓ′-ℓ])
 				    		Y21[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n2n1
 				    	end
 				    	end
@@ -3976,39 +4051,50 @@ module kernel
 
 			radial_time += @elapsed @. K *=  4r^2 * ρ
 
-			end
-
 			fits_init_time += @elapsed begin
 			for (procid,fitsfile) in Gobs_files
 				close(fitsfile)
 			end
-			end
+			end # fits_init_time
+
+			end # total_proc_time
+
+			# Libdl.dlclose(lib)
 
 			# return K
-			return (parallel_utilities_time,fits_init_time,fits_read_time,
+			return (parallel_utilities_time,mode_related_stuff_time,
+					fits_init_time,fits_read_time,
 					biposh_time,radial_time,sum_over_s_time,total_proc_time,K)
 		end
 
 		procs = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs)
 
+		# debugging
+		# @sync for (rank,p) in enumerate(procs)
+		# 	@async begin
+		# 		println(fetch(@spawnat p summodes(rank)))
+		# 	end
+		# end
+
 		K = zeros(1:nr,K_components,1:s_max)
 		total_time = @elapsed @sync for (rank,p) in enumerate(procs)
 			@async begin
 				
-				fetch_time = @elapsed parallel_utilities_time,fits_init_time,fits_read_time,
+				fetch_time = @elapsed parallel_utilities_time,mode_related_stuff_time,
+				fits_init_time,fits_read_time,
 				biposh_time,radial_time,sum_over_s_time,total_proc_time,Ki = fetch(@spawnat p summodes(rank)) 
 
 				K .+= Ki
-				println(rank," parallel util time ",round(parallel_utilities_time,digits=2),
-					" fits init time ",round(fits_init_time,digits=2),
-					" fits read time ",round(fits_read_time,digits=2),
-					" biposh time ",round(biposh_time,digits=2),
-					" radial time ",round(radial_time,digits=2),
-					" sum s time ",round(sum_over_s_time,digits=2),
-					" total proc time ",round(total_proc_time,digits=2),
-					" fetch time ",round(fetch_time-total_proc_time,digits=2))
-				# K .+= fetch(@spawnat p summodes(rank)) 
+				println(rank," putil ",round(parallel_utilities_time,digits=2),
+					" mode ",round(mode_related_stuff_time,digits=2),
+					" fits init ",round(fits_init_time,digits=2),
+					" fits read ",round(fits_read_time,digits=2),
+					" biposh ",round(biposh_time,digits=2),
+					" radial ",round(radial_time,digits=2),
+					" sum s ",round(sum_over_s_time,digits=2),
+					" proc ",round(total_proc_time,digits=2),
+					" fetch ",round(fetch_time-total_proc_time,digits=2))
 			end
 		end
 		println("Total time ",total_time)

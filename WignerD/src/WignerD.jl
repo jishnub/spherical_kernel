@@ -4,6 +4,12 @@ using OffsetArrays, WignerSymbols, LinearAlgebra,Libdl
 using PointsOnASphere
 
 function djmatrix(j,θ;m_range=-j:j,n_range=-j:j)
+	dj = OffsetArray{Float64}(undef,m_range,n_range)
+	djmatrix!(dj,j,θ;m_range=m_range,n_range=n_range)
+	return dj
+end
+
+function djmatrix!(dj,j,θ;m_range=-j:j,n_range=-j:j)
 	N = 2j+1
 	A = coeffi(j)
 	λ,v = eigen(A)
@@ -19,12 +25,11 @@ function djmatrix(j,θ;m_range=-j:j,n_range=-j:j)
 		λ = OffsetArray(λ[p],-j:j)
 	end
 
-	dj = OffsetArray{Float64}(undef,m_range,n_range)
-
 	# check if symmetry conditions allow the index to be evaluated
-	inds_covered = OffsetArray(falses(size(dj)...),axes(dj)...)
+	inds_covered = OffsetArray(falses(length(m_range),length(n_range)),
+					m_range,n_range)
 
-	@inbounds for (m,n) in Base.Iterators.product(axes(dj)...)
+	@inbounds for (m,n) in Base.Iterators.product(m_range,n_range)
 
 		inds_covered[m,n] && continue
 
@@ -71,42 +76,46 @@ function djmatrix(j,θ;m_range=-j:j,n_range=-j:j)
 		end
 		
 	end
-
-	return dj
 end
 
-precompile(djmatrix,(Int64,Float64))
-
+djmatrix(j,n::SphericalPoint;kwargs...) = djmatrix(j,n.θ;kwargs...)
 djmatrix(j,m,n,θ) = djmatrix(j,θ,m_range=m:m,n_range=n:n)
+djmatrix(j,m,n,n1::SphericalPoint) = djmatrix(j,n1.θ,m_range=m:m,n_range=n:n)
 
-
-Ylmatrix(l,m,n,(θ,ϕ)::Tuple{<:Real,<:Real}) = Ylmatrix(l,(θ,ϕ),m_range=m:m,n_range=n:n)
-Ylmatrix(l,m,n,n1::SphericalPoint) = Ylmatrix(l,(n1.θ,n1.ϕ),m_range=m:m,n_range=n:n)
+djmatrix!(dj,j,n::SphericalPoint;kwargs...) = djmatrix(dj,j,n.θ;kwargs...)
+djmatrix!(dj,j,m,n,θ) = djmatrix(dj,j,θ,m_range=m:m,n_range=n:n)
+djmatrix!(dj,j,m,n,n1::SphericalPoint) = djmatrix(dj,j,n1.θ,m_range=m:m,n_range=n:n)
 
 function Ylmatrix(l,(θ,ϕ)::Tuple{<:Real,<:Real};m_range=-l:l,n_range=-1:1)
 
-	dj_θ = djmatrix(l,θ,n_range=n_range,m_range=m_range)
-
+	dj_θ = djmatrix(l,θ,m_range=m_range,n_range=n_range)
 	Y = OffsetArray{ComplexF64}(undef,axes(dj_θ)...)
+	Ylmatrix!(Y,dj_θ,l,(θ,ϕ);m_range=m_range,n_range=n_range,compute_d_matrix=false)
 
-	@inbounds for (m,n) in Base.Iterators.product(axes(dj_θ)...)
-		Y[m,n] = √((2l+1)/4π) * dj_θ[m,n] * cis(m*ϕ)
-	end
 	return Y
 end
 
-precompile(Ylmatrix,(Int64,Tuple{Float64,Float64}))
-precompile(Ylmatrix,(Int64,Tuple{Int64,Float64}))
-precompile(Ylmatrix,(Int64,Tuple{Float64,Int64}))
-precompile(Ylmatrix,(Int64,Tuple{Int64,Int64}))
+function Ylmatrix!(Y,dj_θ,l,(θ,ϕ)::Tuple{<:Real,<:Real};
+	m_range=-l:l,n_range=-1:1,compute_d_matrix::Bool=true)
 
-Ylmatrix(l,n::SphericalPoint;m_range=-l:l,n_range=-1:1) = Ylmatrix(l,(n.θ,n.ϕ);m_range=m_range,n_range=n_range)
+	if compute_d_matrix
+		djmatrix!(dj_θ,l,θ,m_range=m_range,n_range=n_range)
+	end
+
+	@inbounds for (m,n) in Base.Iterators.product(m_range,n_range)
+		Y[m,n] = √((2l+1)/4π) * dj_θ[m,n] * cis(m*ϕ)
+	end
+end
+
+Ylmatrix(l,m,n,(θ,ϕ)::Tuple{<:Real,<:Real}) = Ylmatrix(l,(θ,ϕ),m_range=m:m,n_range=n:n)
+Ylmatrix(l,m,n,n1::SphericalPoint) = Ylmatrix(l,(n1.θ,n1.ϕ),m_range=m:m,n_range=n:n)
+Ylmatrix(l,n::SphericalPoint;kwargs...) = Ylmatrix(l,(n.θ,n.ϕ);kwargs...)
+
+Ylmatrix!(Y,dj_θ,l,m,n,(θ,ϕ)::Tuple{<:Real,<:Real}) = Ylmatrix(Y,dj_θ,l,(θ,ϕ),m_range=m:m,n_range=n:n)
+Ylmatrix!(Y,dj_θ,l,m,n,n1::SphericalPoint) = Ylmatrix(Y,dj_θ,l,(n1.θ,n1.ϕ),m_range=m:m,n_range=n:n)
+Ylmatrix!(Y,dj_θ,l,n::SphericalPoint;kwargs...) = Ylmatrix!(Y,dj_θ,l,(n.θ,n.ϕ);kwargs...)
 
 X(j,n) = sqrt((j+n)*(j-n+1))
-
-for (T1,T2) in Base.Iterators.product((Int64,Float64),(Int64,Float64))
-	precompile(X,(T2,T2))
-end
 
 function coeffi(j)
 	N = 2j+1
@@ -123,17 +132,19 @@ function coeffi(j)
 	return Hermitian(A)
 end
 
-precompile(coeffi,(Int64,))
-precompile(coeffi,(Float64,))
-
-
 ##################################################################################################
 
 # Only t=0
-function BiPoSH_s0(ℓ₁,ℓ₂,s::Integer,β::Integer,γ::Integer,(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real})
+function BiPoSH_s0(ℓ₁,ℓ₂,s::Integer,β::Integer,γ::Integer,
+	(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real};
+	Y_ℓ₁=zeros(0:-1,0:-1),Y_ℓ₂=zeros(0:-1,0:-1))
 	# only t=0
-	Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁),n_range=β:β)
-	Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂),n_range=γ:γ)
+	if iszero(length(Y_ℓ₁)) 
+		Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁),n_range=β:β) :: OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
+	end
+	if iszero(length(Y_ℓ₂))
+		Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂),n_range=γ:γ) :: OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
+	end
 	@assert(δ(ℓ₁,ℓ₂,s),"|ℓ₁-ℓ₂|<=s<=ℓ₁+ℓ₂ not satisfied")
 	m_max = min(ℓ₁,ℓ₂) ::Integer
 
@@ -147,10 +158,16 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s::Integer,β::Integer,γ::Integer,(θ₁,ϕ₁
 end
 
 function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,
-	(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real};wig3j_fn_ptr=nothing)
+	(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real};wig3j_fn_ptr=nothing,
+	Y_ℓ₁=zeros(0:-1,0:-1),Y_ℓ₂=zeros(0:-1,0:-1))
 	# only t=0
-	Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁),n_range=β:β)
-	Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂),n_range=γ:γ)
+
+	if iszero(length(Y_ℓ₁)) 
+		Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁),n_range=β:β) :: OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
+	end
+	if iszero(length(Y_ℓ₂))
+		Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂),n_range=γ:γ) :: OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
+	end
 	m_max = min(ℓ₁,ℓ₂)
 
 	s_valid = abs(ℓ₁-ℓ₂):ℓ₁+ℓ₂
@@ -170,7 +187,7 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,
 
 		s_intersection = intersect(axes(Y_BSH,1),axes(CG,1))
 		
-		@inbounds  for s in s_intersection
+		@inbounds for s in s_intersection
 			Y_BSH[s,β,γ] += CG[s]*Y_ℓ₁[m,β]*Y_ℓ₂[-m,γ]
 		end
 	end
@@ -182,10 +199,19 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,
 	return Y_BSH
 end
 
-function BiPoSH_s0(ℓ₁,ℓ₂,s::Integer,(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real})
+function BiPoSH_s0(ℓ₁,ℓ₂,s::Integer,
+	(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real};
+	Y_ℓ₁=zeros(0:-1,0:-1),Y_ℓ₂=zeros(0:-1,0:-1))
+
 	# only t=0
-	Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁))
-	Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂))
+	if iszero(length(Y_ℓ₁))
+		Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁)) :: OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
+	end
+
+	if iszero(length(Y_ℓ₂)) 
+		Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂)) :: OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
+	end
+
 	@assert(δ(ℓ₁,ℓ₂,s),"|ℓ₁-ℓ₂|<=s<=ℓ₁+ℓ₂ not satisfied")
 	m_max = min(ℓ₁,ℓ₂)
 
@@ -198,9 +224,18 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s::Integer,(θ₁,ϕ₁)::Tuple{<:Real,<:Real},
 	return Y_BSH
 end
 
-function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real};wig3j_fn_ptr=nothing)
-	Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁))
-	Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂))
+function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,
+	(θ₁,ϕ₁)::Tuple{<:Real,<:Real},(θ₂,ϕ₂)::Tuple{<:Real,<:Real};wig3j_fn_ptr=nothing,
+	Y_ℓ₁=zeros(0:-1,0:-1),Y_ℓ₂=zeros(0:-1,0:-1))
+
+	if iszero(length(Y_ℓ₁))
+		Y_ℓ₁ = Ylmatrix(ℓ₁,(θ₁,ϕ₁)) :: OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
+	end
+
+	if iszero(length(Y_ℓ₂)) 
+		Y_ℓ₂ = Ylmatrix(ℓ₂,(θ₂,ϕ₂)) :: OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
+	end
+
 	m_max = min(ℓ₁,ℓ₂)
 
 	s_valid = abs(ℓ₁-ℓ₂):ℓ₁+ℓ₂
@@ -232,9 +267,11 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:R
 	return Y_BSH
 end
 
-BiPoSH_s0(ℓ₁,ℓ₂,s,β::Integer,γ::Integer,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH_s0(ℓ₁,ℓ₂,s,β,γ,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
-BiPoSH_s0(ℓ₁,ℓ₂,s,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH_s0(ℓ₁,ℓ₂,s,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
+BiPoSH_s0(ℓ₁,ℓ₂,s,β::Integer,γ::Integer,
+	n1::SphericalPoint,n2::SphericalPoint;kwargs...) = BiPoSH_s0(ℓ₁,ℓ₂,s,β,γ,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ);kwargs...)
 
+BiPoSH_s0(ℓ₁,ℓ₂,s,
+	n1::SphericalPoint,n2::SphericalPoint;kwargs...) = BiPoSH_s0(ℓ₁,ℓ₂,s,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ);kwargs...)
 
 # Any t
 
@@ -478,6 +515,7 @@ function CG_ℓ₁mℓ₂nst(ℓ₁,m,ℓ₂,t=0;wig3j_fn_ptr=nothing)
 end
 
 export Ylmn,Ylmatrix,djmn,djmatrix,BiPoSH_s0,BiPoSH,BSH
+include("./precompile.jl")
 
 end
 
