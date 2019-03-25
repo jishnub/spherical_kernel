@@ -128,8 +128,66 @@ module parallel_utilities
 		return (ℓ_min=ℓ_min,ℓ_max=ℓ_max,ω_ind_min=ω_ind_min,ω_ind_max=ω_ind_max)
 	end
 
-	export split_product_across_processors,get_processor_id_from_split_array,get_processor_range_from_split_array,workers_active
+	function node_remotechannels(::Type{T},procs_used) where {T}
+		hostnames = pmap(p->remotecall_fetch(Base.Libc.gethostname,p),procs_used)
+		nodes = unique(hostnames);	num_nodes = length(nodes)
+		num_procs_node = Dict(node=>count(x->x==node,hostnames) for node in nodes)
+		rank_counter = Dict(node=>0 for node in nodes)
+		rank_on_node = zeros(Int64,length(procs_used))
+
+		for (ind,host) in enumerate(hostnames)
+			rank_on_node[ind] = rank_counter[host]
+			rank_counter[host] += 1
+		end
+
+		# Create one local channel on each node to carry out reduction,
+		node_channels = Dict(
+			hostnames[findfirst(x->x==p,procs_used)]=>
+			RemoteChannel(
+				()->Channel{T}(
+					num_procs_node[hostnames[findfirst(x->x==p,procs_used)]]-1),p)
+			for p in procs_used[rank_on_node .== 0])
+
+		return rank_on_node,hostnames,num_procs_node,node_channels
+	end
+
+	function pmapsum!(::Type{T},f,procs_used,K) where {T}
+		rank_on_node,hostnames,num_procs_node,node_channels = node_remotechannels(T,procs_used)
+		
+		println("Launching jobs")
+		@sync for (rank,(p,hostname)) in enumerate(zip(procs_used,hostnames))
+			@async @spawnat p f(rank,rank_on_node[rank],
+							num_procs_node[hostname],node_channels[hostname])
+		end
+
+		println("Collecting")
+		for channel in values(node_channels)
+			K .+= take!(channel)
+		end
+		
+		close.(values(node_channels))
+	end
+
+	function pmapsum(::Type{T},f,procs_used) where {T}
+		rank_on_node,hostnames,num_procs_node,node_channels = node_remotechannels(T,procs_used)
+		
+		println("Launching jobs")
+		@sync for (rank,(p,hostname)) in enumerate(zip(procs_used,hostnames))
+			@async @spawnat p f(rank,rank_on_node[rank],
+							num_procs_node[hostname],node_channels[hostname])
+		end
+
+		println("Collecting")
+		K = sum(take!.(values(node_channels)))
+		
+		close.(values(node_channels))
+		return K
+	end
+
+	export split_product_across_processors,get_processor_id_from_split_array
+	export get_processor_range_from_split_array,workers_active
 	export get_index_in_split_array,procid_and_mode_index,minmax_from_split_array
+	export node_remotechannels,pmapsum,pmapsum!
 end
 
 ###########################################################################################
@@ -1115,9 +1173,9 @@ module Greenfn_3D
 		
 		f = eval(Symbol("compute_3D_Greenfn_$(basis)_angular_sections_onefreq"))
 
-		Gfn_3D_futures_procs = [@spawnat p f(x′,θ,ϕ,ν) for p in workers_active(1:nθ,1:nϕ)]
+		Gfn_3D_futures_procs_used = [@spawnat p f(x′,θ,ϕ,ν) for p in workers_active(1:nθ,1:nϕ)]
 
-		Gfn_3D = reshape(cat(fetch.(Gfn_3D_futures_procs)...,dims=2),nr,nθ,nϕ,3)
+		Gfn_3D = reshape(cat(fetch.(Gfn_3D_futures_procs_used)...,dims=2),nr,nθ,nϕ,3)
 	end
 
 	function compute_u_dot_∇_G_uniform_rotation(x′::Point3D,θ::AbstractArray,ϕ::AbstractArray,ν::Real=3e-3)
@@ -1130,9 +1188,9 @@ module Greenfn_3D
 		nθ = length(θ); 
 		nϕ=length(ϕ);
 		
-		Gfn_3D_futures_procs = [@spawnat p uϕ∇ϕG_uniform_rotation_angular_sections_onefreq(x′,θ,ϕ,ν) for p in workers_active(1:nθ,1:nϕ)]
+		Gfn_3D_futures_procs_used = [@spawnat p uϕ∇ϕG_uniform_rotation_angular_sections_onefreq(x′,θ,ϕ,ν) for p in workers_active(1:nθ,1:nϕ)]
 
-		Gfn_3D = reshape(cat(fetch.(Gfn_3D_futures_procs)...,dims=2),nr,nθ,nϕ,3)
+		Gfn_3D = reshape(cat(fetch.(Gfn_3D_futures_procs_used)...,dims=2),nr,nθ,nϕ,3)
 	end
 
 	function δLG_uniform_rotation(x_src::Point3D,θ::AbstractArray,ϕ::AbstractArray,ν::Real=3e-3)
@@ -1601,10 +1659,10 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
 
-		@sync for (rank,p) in enumerate(procs)
+		@sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				Ci = remotecall_fetch(summodes,p,rank)
 				ax = axes(Ci,1)
@@ -1687,10 +1745,10 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
 
-		@sync for (rank,p) in enumerate(procs)
+		@sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				Ci = remotecall_fetch(summodes,p,rank)
 				ax = axes(Ci,2)
@@ -1764,10 +1822,10 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
 
-		@sync for (rank,p) in enumerate(procs)
+		@sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				Ci = remotecall_fetch(summodes,p,rank)
 				ax = axes(Ci,2)
@@ -1848,10 +1906,10 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
 
-		@sync for (rank,p) in enumerate(procs)
+		@sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				Ci = remotecall_fetch(summodes,p,rank)
 				ax = axes(Ci,1)
@@ -1941,12 +1999,12 @@ module crosscov
 
 		end
 
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
 
 		Cℓω = zeros(ℓ_range,ν_ind_range)
 
-		@sync for (rank,p) in enumerate(procs)
+		@sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				Cℓω_part = remotecall_fetch(summodes,p,rank)
 				for ind in eachindex(Cℓω_part)
@@ -2030,12 +2088,12 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
 
 		Cω_arr = zeros(ComplexF64,Nν)
 
-		@sync for (rank,p) in enumerate(procs)
+		@sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				Ci = remotecall_fetch(summodes,p,rank)
 				ax = axes(Ci,1)
@@ -2107,19 +2165,19 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
 
 		Cω_arr = zeros(ComplexF64,length(x2_arr),Nν)
 
-		# futures = [@spawnat p summodes(rank) for (rank,p) in enumerate(procs)]
+		# futures = [@spawnat p summodes(rank) for (rank,p) in enumerate(procs_used)]
 		# for f in futures
 		# 	Ci = fetch(f)
 		# 	ν_range = axes(Ci,2)
 		# 	@. Cω_arr[:,ν_range + ν_start_zeros] += Ci.parent
 		# end
 
-		@sync for (rank,p) in enumerate(procs)
+		@sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				Ci = remotecall_fetch(summodes,p,rank)
 				ax = axes(Ci,2)
@@ -2180,19 +2238,19 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
 
 		Cω_arr = zeros(ComplexF64,length(n2_arr),Nν)
 
-		# futures = [@spawnat p summodes(rank) for (rank,p) in enumerate(procs)]
+		# futures = [@spawnat p summodes(rank) for (rank,p) in enumerate(procs_used)]
 		# for f in futures
 		# 	Ci = fetch(f)
 		# 	ν_range = axes(Ci,2)
 		# 	@. Cω_arr[:,ν_range + ν_start_zeros] += Ci.parent
 		# end
 
-		@sync for (rank,p) in enumerate(procs)
+		@sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				Ci = remotecall_fetch(summodes,p,rank)
 				ax = axes(Ci,2)
@@ -2308,10 +2366,10 @@ module crosscov
 			return Cϕω_arr
 		end
 
-		procs = workers_active(ℓ_range,1:Nν_Gfn)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,1:Nν_Gfn)
+		num_workers = length(procs_used)
 
-	    @sync for (rank,p) in enumerate(procs)
+	    @sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				Ci = remotecall_fetch(summodes,p,rank)
 				ax = axes(Ci,2)
@@ -2541,10 +2599,10 @@ module crosscov
 
 		end
 
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
 
-		@sync for (rank,p) in enumerate(procs)
+		@sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				δC_i = remotecall_fetch(summodes,p,rank)
 				ax = axes(Ci,1)
@@ -2982,11 +3040,11 @@ module kernel
 			return 4*√(3/4π)*im .* K .* r .* ρ
 		end
 
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
 
 		K = zeros(ComplexF64,nr)
-		@sync for (rank,p) in enumerate(procs)
+		@sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				K .+= remotecall_fetch(summodes,p,rank)
 			end
@@ -3101,11 +3159,11 @@ module kernel
 
 		h_ω_arr = [h(x1,x2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src).h_ω[ν_start_zeros .+ ν_ind_range] for x2 in x2_arr]# only in range
 
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
 
 		K = zeros(ComplexF64,nr,length(x2_arr))
-		@sync for (rank,p) in enumerate(procs)
+		@sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				K .+= remotecall_fetch(summodes,p,rank)
 			end
@@ -3152,7 +3210,7 @@ module kernel
 				# Get a list of (ℓ,ω) in this file
 				modes_in_Gsrc_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
 
-				# check if number of procs is the same for the source and observer, 
+				# check if number of procs_used is the same for the source and observer, 
 				# in this case the file indices are identical.
 				if num_procs_obs == num_procs
 					# Green function about receiver location
@@ -3204,17 +3262,17 @@ module kernel
 			return 4*√(3/4π)*im .* K .* r .* ρ
 		end		
 
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
 
 		K = zeros(ComplexF64,nr)
-		@sync for (rank,p) in enumerate(procs)
+		@sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				K .+= remotecall_fetch(summodes,p,rank)
 			end
 		end
 
-		# kernel_futures = [@spawnat p summodes(rank) for (rank,p) in enumerate(procs)]
+		# kernel_futures = [@spawnat p summodes(rank) for (rank,p) in enumerate(procs_used)]
 		# K = sum(fetch.(kernel_futures))
 
 		return K
@@ -3255,7 +3313,7 @@ module kernel
 				# Get a list of (ℓ,ω) in this file
 				modes_in_Gsrc_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
 
-				# check if number of procs is the same for the source and observer, 
+				# check if number of procs_used is the same for the source and observer, 
 				# in this case the file indices are identical.
 				if num_procs_obs == num_procs
 					# Green function about receiver location
@@ -3316,14 +3374,14 @@ module kernel
 		∂ϕ₂Pl_cosχ_arr = [dPl(cosχ(n1,n2),ℓmax=ℓ_arr[end]).*∂ϕ₂cosχ(n1,n2) for n2 in n2_arr]
 		h_ω_arr = [h(n1,n2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src,r_obs=r_obs).h_ω[ν_start_zeros .+ ν_ind_range] for n2 in n2_arr]# only in range
 
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
 
-		# kernel_futures = [@spawnat p summodes(rank) for (rank,p) in enumerate(procs)]
+		# kernel_futures = [@spawnat p summodes(rank) for (rank,p) in enumerate(procs_used)]
 		# K = sum(fetch.(kernel_futures))
 
 		K = zeros(ComplexF64,nr,length(n2_arr))
-		@sync for (rank,p) in enumerate(procs)
+		@sync for (rank,p) in enumerate(procs_used)
 			@async begin
 				K .+= remotecall_fetch(summodes,p,rank)
 			end
@@ -3450,6 +3508,12 @@ module kernel
 	
 	Nℓ′ℓs(ℓ′,ℓ,s) = √((2ℓ+1)*(2ℓ′+1)/(4π*(2s+1)))
 
+	function Gfn_fits_files(path,proc_id_range)
+		Dict{Int64,FITS}(procid=>FITS(joinpath(path,
+					@sprintf "Gfn_proc_%03d.fits" procid),"r") 
+					for procid in proc_id_range)				
+	end
+
 	function flow_kernels_srange_t0(x1::Point3D,x2::Point3D,s_max;
 		ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,r_src=Rsun-75e5,K_components=-1:1)
 
@@ -3474,30 +3538,16 @@ module kernel
 
 		dω = dν*2π
 
-		function summodes(rank)
-
-			parallel_utilities_time = 0.0
-			fits_init_time = 0.0
-			fits_read_time = 0.0
-			biposh_time = 0.0
-			radial_time = 0.0
-			sum_over_s_time = 0.0
-			total_proc_time = 0.0
-			mode_related_stuff_time = 0.0
-
-			total_proc_time += @elapsed begin
+		function summodes(rank,rank_node,np_node,channel_on_node)
 		
-			parallel_utilities_time += @elapsed begin
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
-			end # parallel_utilities_time
 
 			# Get a list of all modes that will be accessed.
 			# This can be used to open the fits files before the loops begin.
 			# This will cut down on FITS IO costs
 
 			# Gℓ′ω(r,robs) files
-			mode_related_stuff_time += @elapsed begin
 			first_mode = first(ℓ_ωind_iter_on_proc)
 			last_mode = last(collect(ℓ_ωind_iter_on_proc))
 			ℓ′_min_first_mode = max(minimum(ℓ_arr),abs(first_mode[1]-s_max))
@@ -3505,9 +3555,7 @@ module kernel
 			modes_minmax = minmax_from_split_array(ℓ_ωind_iter_on_proc)
 			ℓ_max_proc = modes_minmax.ℓ_max
 			ℓ′_max_proc =  ℓ_max_proc + s_max
-			end # mode_related_stuff_time
 			
-			parallel_utilities_time += @elapsed begin
 			proc_id_min_G_x1 = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
 									(ℓ′_min_first_mode,first_mode[2]),num_procs_x1)
 			proc_id_max_G_x1 = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
@@ -3522,18 +3570,9 @@ module kernel
 				proc_id_max_G_x2 = proc_id_max_G_x1
 			end
 
-			end #parallel_utilities_time
 
-			fits_init_time += @elapsed begin
-			
-			G_x1_files = Dict{Int64,FITS}(procid=>FITS(joinpath(Gfn_path_x1,
-							@sprintf "Gfn_proc_%03d.fits" procid),"r") 
-							for procid in proc_id_min_G_x1:proc_id_max_G_x1)
-			
-			G_x2_files = Dict{Int64,FITS}(procid=>FITS(joinpath(Gfn_path_x2,
-							@sprintf "Gfn_proc_%03d.fits" procid),"r") 
-							for procid in proc_id_min_G_x2:proc_id_max_G_x2)
-			end # fits_init_time
+			G_x1_files = Gfn_fits_files(Gfn_path_x1,proc_id_min_G_x1:proc_id_max_G_x1)
+			G_x2_files = Gfn_fits_files(Gfn_path_x2,proc_id_min_G_x2:proc_id_max_G_x2)
 
 			K = zeros(nr,minimum(K_components):maximum(K_components),1:s_max)
 
@@ -3554,7 +3593,6 @@ module kernel
 			# Clebsch Gordan coefficients, indices are (s,η,t)
 			Cℓ′ℓ = zeros(-1:1,1:s_max,-1:0)
 
-			biposh_time += @elapsed begin
 			# cache Ylmn arrays to speed up computation of BiPoSH_s0
 			# Create an OffsetArray of the Ylmn OffsetArrays
 			T = OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
@@ -3575,39 +3613,27 @@ module kernel
 			Y12 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
 			Y21 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
 
-			end #biposh_time
-
 			# keep track of ℓ to cache Yℓ′ by rolling arrays
 			# if ℓ changes by 1 arrays can be rolled
 			# if the ℓ wraps back then δℓ will be negative. 
 			# In this case we need to recompute the Yℓ′ arrays
-			mode_related_stuff_time += @elapsed ℓ_prev = first_mode[1]
+			ℓ_prev = first_mode[1]
 
 			# Loop over the Greenfn files
 			for proc_id in proc_id_range_Gsrc
 
-				fits_init_time += @elapsed begin
 				Gsrc_file = FITS(joinpath(Gfn_path_src,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
-				end
 
 				# Get a list of (ℓ,ω) in this file
-				parallel_utilities_time += @elapsed begin
 				modes_in_src_Gfn_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
-				end
 
 				for (ℓ,ω_ind) in intersect(ℓ_ωind_iter_on_proc,modes_in_src_Gfn_file)
 
-					parallel_utilities_time += @elapsed begin
 					ℓω_index_Gsrc_file = get_index_in_split_array(modes_in_src_Gfn_file,(ℓ,ω_ind))
-					end
 
 					ω = dω*(ν_start_zeros + ω_ind)
 		    		
-		    		radial_time += @elapsed begin
-		    		
-		    		fits_read_time += @elapsed begin
 		    		G = read(Gsrc_file[1],:,:,1:2,1,1,ℓω_index_Gsrc_file)
-		    		end
 
 		    		@. Gsrc[:,0] = G[:,1,1] + im*G[:,2,1]
 		    		@. Gsrc[:,1] = G[:,1,2] + im*G[:,2,2]
@@ -3615,12 +3641,9 @@ module kernel
 		    		G_r₂_rsrc = Gsrc[r₂_ind,0]
 
 		    		if 0 in K_components
-		    			fits_read_time += @elapsed begin
 		    			G = read(Gsrc_file[1],:,:,1:2,1,2,ℓω_index_Gsrc_file)
-		    			end
 			    		@. drGsrc[:,0] = G[:,1,1] + im*G[:,2,1]
 			    		@. drGsrc[:,1] = G[:,1,2] + im*G[:,2,2]
-		    		end
 		    		end
 
 		    		G = nothing
@@ -3628,7 +3651,6 @@ module kernel
 		    		ℓ′_range = intersect(ℓ_arr,abs(ℓ-s_max):ℓ+s_max)
 
 		    		# Precompute Ylmatrix to speed up evaluation of BiPoSH_s0
-		    		biposh_time += @elapsed begin
 		    		Yℓ_n2 = Ylmatrix(ℓ,x2,n_range=0:0)
 		    		Yℓ_n1 = Ylmatrix(ℓ,x1,n_range=0:0)
 
@@ -3656,8 +3678,6 @@ module kernel
 			    		end
 			    	end
 
-			    	end #timing
-
 			    	ℓ_prev=ℓ
 
 				    for ℓ′ in ℓ′_range
@@ -3668,7 +3688,6 @@ module kernel
 				    	# If we have computed Yℓℓ′s0(n1,n2) already in the previous step,
 				    	# then we can simply read it in from the dictionary
 
-				    	biposh_time += @elapsed begin
 				    	if haskey(Y12,(ℓ′,ℓ))
 				    		Yℓ′ℓ_s0_n1n2 = Y12[(ℓ′,ℓ)]
 				    	elseif haskey(Y21,(ℓ,ℓ′))
@@ -3689,30 +3708,22 @@ module kernel
 				    						Y_ℓ₁=Yℓ′_n2_arr[ℓ′-ℓ])
 				    		Y21[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n2n1
 				    	end
-				    	end
 
 			    		# Compute the CG coefficients that appear in fℓ′ℓsω
 			    		for t=-1:0,s in 1:s_max,η=-1:1
 			    			Cℓ′ℓ[η,s,t] = clebschgordan(ℓ′,-η,ℓ,η+t,s,t)
 			    		end
 
-			    		parallel_utilities_time += @elapsed begin
 			    		proc_id_mode_G_x1,ℓ′ω_index_G_x1_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,(ℓ′,ω_ind),num_procs_x1)
 			    		proc_id_mode_G_x2,ℓ′ω_index_G_x2_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,(ℓ′,ω_ind),num_procs_x2)
-			    		end
 						
-						radial_time += @elapsed begin
 	    				# Green functions based at the observation point for ℓ′
-	    				fits_read_time += @elapsed begin
 	    				G = read(G_x1_files[proc_id_mode_G_x1][1],:,:,1:2,1,1,ℓ′ω_index_G_x1_file)
-	    				end
 			    		@. G_x1[:,0] = G[:,1,1] + im*G[:,2,1]
 			    		@. G_x1[:,1] = G[:,1,2] + im*G[:,2,2]
 
 			    		if !obs_at_same_height
-				    		fits_read_time += @elapsed begin
 		    				G = read(G_x2_files[proc_id_mode_G_x2][1],:,:,1:2,1,1,ℓ′ω_index_G_x2_file)
-		    				end
 
 		    				@. G_x2[:,0] = G[:,1,1] + im*G[:,2,1]
 				    		@. G_x2[:,1] = G[:,1,2] + im*G[:,2,2]
@@ -3742,18 +3753,15 @@ module kernel
 				    		end
 				    	end
 
-			    		end # timing
-
-			    		sum_over_s_time += @elapsed begin
 			    		for s in LinearIndices(Yℓ′ℓ_s0_n2n1)
 			    			# radial component (for all s)
 			    			
-			    			radial_time += @elapsed begin
-
 			    			if 0 in K_components
 			    				fℓ′ℓsω_r₁[:,0] .= sum(f_radial_0_r₁[:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1)
 			    				if !obs_at_same_height
 			    					fℓ′ℓsω_r₂[:,0] .= sum(f_radial_0_r₂[:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1)
+			    				else
+			    					fℓ′ℓsω_r₂[:,0] .= fℓ′ℓsω_r₁[:,0]
 			    				end
 			    			end
 
@@ -3761,24 +3769,24 @@ module kernel
 			    				fℓ′ℓsω_r₁[:,1] .= sum(f_radial_1_r₁[:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
 			    				if !obs_at_same_height
 			    					fℓ′ℓsω_r₂[:,1] .= sum(f_radial_1_r₂[:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
+			    				else
+			    					fℓ′ℓsω_r₂[:,1] .= fℓ′ℓsω_r₁[:,1]
 			    				end
 			    			end
-
-			    			end # timing
 
 			    			if isodd(ℓ+ℓ′+s) && -1 in K_components
 			    				# tangential - component (K⁺ - K⁻), only for odd l+l′+s
 								# only imag part calculated, the actual kernel is iK
 								# extra factor of 2 from the (1 - (-1)^(ℓ+ℓ′+s)) term
 								@. K[:,-1,s] += 2 * dω/2π * ω^3 * Powspec(ω) * Nℓ′ℓs(ℓ′,ℓ,s) * 
-					     					real(conj(h_ω_arr[ω_ind]) *
+					     					2real(conj(h_ω_arr[ω_ind]) *
 					     					(conj(fℓ′ℓsω_r₁[:,1])*G_r₂_rsrc*conj(Yℓ′ℓ_s0_n1n2[s]) 
 					     						+ conj(G_r₁_rsrc)*fℓ′ℓsω_r₂[:,1]*Yℓ′ℓ_s0_n2n1[s]) )
 			    			end
 
 			    			if 0 in K_components
 						     	@. K[:,0,s] +=  dω/2π * ω^3 * Powspec(ω) * Nℓ′ℓs(ℓ′,ℓ,s) * 
-						     					real(conj(h_ω_arr[ω_ind]) *
+						     					2real(conj(h_ω_arr[ω_ind]) *
 						     					(conj(fℓ′ℓsω_r₁[:,0])*G_r₂_rsrc*conj(Yℓ′ℓ_s0_n1n2[s]) 
 						     						+ conj(G_r₁_rsrc)*fℓ′ℓsω_r₂[:,0]*Yℓ′ℓ_s0_n2n1[s]) )
 						    end
@@ -3787,21 +3795,18 @@ module kernel
 								# tangential + component (K⁺ + K⁻), only for even l+l′+s
 								# extra factor of 2 from the (1 + (-1)^(ℓ+ℓ′+s)) term
 								@. K[:,1,s] +=  2 * dω/2π * ω^3 * Powspec(ω) * Nℓ′ℓs(ℓ′,ℓ,s) * 
-					     					real(conj(h_ω_arr[ω_ind]) *
+					     					2real(conj(h_ω_arr[ω_ind]) *
 					     					(conj(fℓ′ℓsω_r₁[:,1])*G_r₂_rsrc*conj(Yℓ′ℓ_s0_n1n2[s]) 
 					     						+ conj(G_r₁_rsrc)*fℓ′ℓsω_r₂[:,1]*Yℓ′ℓ_s0_n2n1[s]) )
 							end
 					    end
-						end
 					end
 				end
 
-				fits_init_time += @elapsed close(Gsrc_file)
+				close(Gsrc_file)
 			end
 
-			radial_time += @elapsed @. K *=  4r^2 * ρ
-
-			fits_init_time += @elapsed begin
+			@. K *=  2r^2 * ρ
 			
 			for (_,fitsfile) in G_x1_files
 				close(fitsfile)
@@ -3810,51 +3815,23 @@ module kernel
 				close(fitsfile)
 			end
 
-			end # fits_init_time
-
-			end # total_proc_time
-
-			# Libdl.dlclose(lib)
-
-			# return K
-			return (parallel_utilities_time,mode_related_stuff_time,
-					fits_init_time,fits_read_time,
-					biposh_time,radial_time,sum_over_s_time,total_proc_time,K)
-		end
-
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
-
-		# debugging
-		# @sync for (rank,p) in enumerate(procs)
-		# 	@async begin
-		# 		println(fetch(@spawnat p summodes(rank)))
-		# 	end
-		# end
-
-		K = zeros(1:nr,K_components,1:s_max)
-		total_time = @elapsed @sync for (rank,p) in enumerate(procs)
-			@async begin
-				
-				fetch_time = @elapsed parallel_utilities_time,mode_related_stuff_time,
-				fits_init_time,fits_read_time,
-				biposh_time,radial_time,sum_over_s_time,total_proc_time,Ki = fetch(@spawnat p summodes(rank)) 
-
-				K .+= Ki
-				println(rank," putil ",round(parallel_utilities_time,digits=2),
-					" mode ",round(mode_related_stuff_time,digits=2),
-					" fits init ",round(fits_init_time,digits=2),
-					" fits read ",round(fits_read_time,digits=2),
-					" biposh ",round(biposh_time,digits=2),
-					" radial ",round(radial_time,digits=2),
-					" sum s ",round(sum_over_s_time,digits=2),
-					" proc ",round(total_proc_time,digits=2),
-					" fetch ",round(fetch_time-total_proc_time,digits=2))
+			if rank_node == 0
+				for n in 1:np_node-1
+					K .+= take!(channel_on_node)
+				end
+				put!(channel_on_node,K)
+			else
+				put!(channel_on_node,K)
 			end
-		end
-		println("Total time ",total_time)
 
-		return K
+			return nothing
+		end
+
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
+
+		T = OffsetArray{Float64,3,Array{Float64,3}} # type of arrays to be added to the channels
+		return pmapsum(T,summodes,procs_used)
 	end
 
 	function flow_kernels_srange_t0(n1::Point2D,n2::Point2D,s_max;
@@ -3876,30 +3853,16 @@ module kernel
 
 		dω = dν*2π
 
-		function summodes(rank)
+		function summodes(rank,rank_node,np_node,channel_on_node)
 
-			parallel_utilities_time = 0.0
-			fits_init_time = 0.0
-			fits_read_time = 0.0
-			biposh_time = 0.0
-			radial_time = 0.0
-			sum_over_s_time = 0.0
-			total_proc_time = 0.0
-			mode_related_stuff_time = 0.0
-
-			total_proc_time += @elapsed begin
-		
-			parallel_utilities_time += @elapsed begin
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
-			end # parallel_utilities_time
 
 			# Get a list of all modes that will be accessed.
 			# This can be used to open the fits files before the loops begin.
 			# This will cut down on FITS IO costs
 
 			# Gℓ′ω(r,robs) files
-			mode_related_stuff_time += @elapsed begin
 			first_mode = first(ℓ_ωind_iter_on_proc)
 			last_mode = last(collect(ℓ_ωind_iter_on_proc))
 			ℓ′_min_first_mode = max(minimum(ℓ_arr),abs(first_mode[1]-s_max))
@@ -3907,20 +3870,15 @@ module kernel
 			modes_minmax = minmax_from_split_array(ℓ_ωind_iter_on_proc)
 			ℓ_max_proc = modes_minmax.ℓ_max
 			ℓ′_max_proc =  ℓ_max_proc + s_max
-			end # mode_related_stuff_time
 			
-			parallel_utilities_time += @elapsed begin
 			proc_id_min_Gobs = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
 									(ℓ′_min_first_mode,first_mode[2]),num_procs_obs)
 			proc_id_max_Gobs = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
 									(ℓ′_max_last_mode,last_mode[2]),num_procs_obs)
-			end #parallel_utilities_time
 
-			fits_init_time += @elapsed begin
 			Gobs_files = Dict{Int64,FITS}(procid=>FITS(joinpath(Gfn_path_obs,
 							@sprintf "Gfn_proc_%03d.fits" procid),"r") 
 							for procid in proc_id_min_Gobs:proc_id_max_Gobs)
-			end # fits_init_time
 
 			K = zeros(nr,minimum(K_components):maximum(K_components),1:s_max)
 
@@ -3936,84 +3894,67 @@ module kernel
 			# Clebsch Gordan coefficients, indices are (s,η,t)
 			Cℓ′ℓ = zeros(-1:1,1:s_max,-1:0)
 
-			biposh_time += @elapsed begin
-			# cache Ylmn arrays to speed up computation of BiPoSH_s0
+			# Cache Ylmn arrays to speed up computation of BiPoSH_s0
 			# Create an OffsetArray of the Ylmn OffsetArrays
 			T = OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
 			Yℓ′_n1_arr = OffsetArray{T}(undef,-s_max:s_max)
-    		Yℓ′_n2_arr = OffsetArray{T}(undef,-s_max:s_max)
-    		# The array indices will be ℓ′-ℓ values to ensure that we can 
-    		# overwrite the preallocated arrays
-    		
-    		for ind in eachindex(Yℓ′_n1_arr)
-    			Yℓ′_n1_arr[ind] = zeros(ComplexF64,-ℓ′_max_proc:ℓ′_max_proc,0:0)
-    		end
+   			Yℓ′_n2_arr = OffsetArray{T}(undef,-s_max:s_max)
+  			# The array indices will be ℓ′-ℓ values to ensure that we can 
+  			# overwrite the preallocated arrays
+  			  
+   			for ind in eachindex(Yℓ′_n1_arr)
+   				Yℓ′_n1_arr[ind] = zeros(ComplexF64,-ℓ′_max_proc:ℓ′_max_proc,0:0)
+   			end
 
-    		for ind in eachindex(Yℓ′_n2_arr)
-    			Yℓ′_n2_arr[ind] = zeros(ComplexF64,-ℓ′_max_proc:ℓ′_max_proc,0:0)
-    		end
+   			for ind in eachindex(Yℓ′_n2_arr)
+   				Yℓ′_n2_arr[ind] = zeros(ComplexF64,-ℓ′_max_proc:ℓ′_max_proc,0:0)
+   			end
 
 			# Cache bipolar spherical harmonics in a dict on each worker
 			Y12 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
 			Y21 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
 
-			end #biposh_time
-
 			# keep track of ℓ to cache Yℓ′ by rolling arrays
 			# if ℓ changes by 1 arrays can be rolled
 			# if the ℓ wraps back then δℓ will be negative. 
 			# In this case we need to recompute the Yℓ′ arrays
-			mode_related_stuff_time += @elapsed ℓ_prev = first_mode[1]
+			ℓ_prev = first_mode[1]
 
 			# Loop over the Greenfn files
 			for proc_id in proc_id_range_Gsrc
 
-				fits_init_time += @elapsed begin
 				Gsrc_file = FITS(joinpath(Gfn_path_src,@sprintf "Gfn_proc_%03d.fits" proc_id),"r")
-				end
 
 				# Get a list of (ℓ,ω) in this file
-				parallel_utilities_time += @elapsed begin
 				modes_in_src_Gfn_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
-				end
 
 				for (ℓ,ω_ind) in intersect(ℓ_ωind_iter_on_proc,modes_in_src_Gfn_file)
 
-					parallel_utilities_time += @elapsed begin
 					ℓω_index_Gsrc_file = get_index_in_split_array(modes_in_src_Gfn_file,(ℓ,ω_ind))
-					end
 
 					ω = dω*(ν_start_zeros + ω_ind)
-		    		
-		    		radial_time += @elapsed begin
-		    		
-		    		fits_read_time += @elapsed begin
-		    		G = read(Gsrc_file[1],:,:,1:2,1,1,ℓω_index_Gsrc_file)
-		    		end
 
-		    		@. Gsrc[:,0] = G[:,1,1] + im*G[:,2,1]
-		    		@. Gsrc[:,1] = G[:,1,2] + im*G[:,2,2]
-		    		G_robs_rsrc = Gsrc[r_obs_ind,0]
-
-		    		if 0 in K_components
-		    			fits_read_time += @elapsed begin
-		    			G = read(Gsrc_file[1],:,:,1:2,1,2,ℓω_index_Gsrc_file)
-		    			end
+		 	 		G = read(Gsrc_file[1],:,:,1:2,1,1,ℓω_index_Gsrc_file)
+	
+		 	 		@. Gsrc[:,0] = G[:,1,1] + im*G[:,2,1]
+		 	 		@. Gsrc[:,1] = G[:,1,2] + im*G[:,2,2]
+		 	 		G_robs_rsrc = Gsrc[r_obs_ind,0]
+	
+		 	 		if 0 in K_components
+		 	 			G = read(Gsrc_file[1],:,:,1:2,1,2,ℓω_index_Gsrc_file)
 			    		@. drGsrc[:,0] = G[:,1,1] + im*G[:,2,1]
 			    		@. drGsrc[:,1] = G[:,1,2] + im*G[:,2,2]
-		    		end
-		    		end
-
-		    		G = nothing
-
-		    		ℓ′_range = intersect(ℓ_arr,abs(ℓ-s_max):ℓ+s_max)
-
-		    		# Precompute Ylmatrix to speed up evaluation of BiPoSH_s0
-		    		biposh_time += @elapsed begin
-		    		Yℓ_n2 = Ylmatrix(ℓ,n2,n_range=0:0)
-		    		Yℓ_n1 = Ylmatrix(ℓ,n1,n_range=0:0)    
-
-		    		if (ℓ - ℓ_prev) == 1
+		 	   		end
+	
+		 	   		G = nothing
+	
+		 	   		ℓ′_range = intersect(ℓ_arr,abs(ℓ-s_max):ℓ+s_max)
+	
+		 	   		# Precompute Ylmatrix to speed up evaluation of BiPoSH_s0
+		 	   		Yℓ_n2 = Ylmatrix(ℓ,n2,n_range=0:0)
+		 	   		Yℓ_n1 = Ylmatrix(ℓ,n1,n_range=0:0)    
+	
+		 	   		if (ℓ - ℓ_prev) == 1
 			    		# roll the Yℓ′ arrays
 			    		for ind in first(ℓ′_range)-ℓ:last(ℓ′_range)-ℓ-1
 			    			@. Yℓ′_n1_arr[ind] = Yℓ′_n1_arr[ind+1]
@@ -4024,10 +3965,9 @@ module kernel
 			    		end
 
 			    		Y = Ylmatrix(last(ℓ′_range),n1,n_range=0:0)
-		    			Yℓ′_n1_arr[last(ℓ′_range)-ℓ][axes(Y)...] = Y
+		 	   			Yℓ′_n1_arr[last(ℓ′_range)-ℓ][axes(Y)...] = Y
 			    		Y = Ylmatrix(last(ℓ′_range),n2,n_range=0:0)
 			    		Yℓ′_n2_arr[last(ℓ′_range)-ℓ][axes(Y)...] = Y
-				    	
 			    	else
 			    		# re-initialize the Yℓ′ arrays
 			    		for ℓ′ in ℓ′_range
@@ -4037,8 +3977,6 @@ module kernel
 			    			Yℓ′_n2_arr[ℓ′-ℓ][axes(Y)...] = Y
 			    		end
 			    	end
-
-			    	end #timing
 
 			    	ℓ_prev=ℓ
 
@@ -4050,7 +3988,6 @@ module kernel
 				    	# If we have computed Yℓℓ′s0(n1,n2) already in the previous step,
 				    	# then we can simply read it in from the dictionary
 
-				    	biposh_time += @elapsed begin
 				    	if haskey(Y12,(ℓ′,ℓ))
 				    		Yℓ′ℓ_s0_n1n2 = Y12[(ℓ′,ℓ)]
 				    	elseif haskey(Y21,(ℓ,ℓ′))
@@ -4071,27 +4008,21 @@ module kernel
 				    						Y_ℓ₁=Yℓ′_n2_arr[ℓ′-ℓ])
 				    		Y21[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n2n1
 				    	end
-				    	end
 
 			    		# Compute the CG coefficients that appear in fℓ′ℓsω
 			    		for t=-1:0,s in 1:s_max,η=-1:1
 			    			Cℓ′ℓ[η,s,t] = clebschgordan(ℓ′,-η,ℓ,η+t,s,t)
 			    		end
 
-			    		parallel_utilities_time += @elapsed begin
 			    		proc_id_mode_Gobs,ℓ′ω_index_Gobs_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,(ℓ′,ω_ind),num_procs_obs)
-			    		end
 			    		
 			    		# fits_init_time += @elapsed begin
 			    		# # Gobs_file = FITS(joinpath(Gfn_path_obs,@sprintf "Gfn_proc_%03d.fits" proc_id_mode_Gobs),"r")
 			    		# Gobs_file = Gobs_files[proc_id_mode_Gobs]
 			    		# end
 						
-						radial_time += @elapsed begin
-	    				# Green functions based at the observation point for ℓ′
-	    				fits_read_time += @elapsed begin
-	    				G = read(Gobs_files[proc_id_mode_Gobs][1],:,:,1:2,1,1,ℓ′ω_index_Gobs_file)
-	    				end
+		  		  		# Green functions based at the observation point for ℓ′
+		  		  		G = read(Gobs_files[proc_id_mode_Gobs][1],:,:,1:2,1,1,ℓ′ω_index_Gobs_file)
 			    		@. Gobs[:,0] = G[:,1,1] + im*G[:,2,1]
 			    		@. Gobs[:,1] = G[:,1,2] + im*G[:,2,2]
 
@@ -4114,14 +4045,9 @@ module kernel
 				    		end
 				    	end
 
-			    		end # timing
-
-			    		sum_over_s_time += @elapsed begin
 			    		for s in LinearIndices(Yℓ′ℓ_s0_n2n1)
 			    			# radial component (for all s)
 			    			
-			    			radial_time += @elapsed begin
-
 			    			if 0 in K_components
 			    				fℓ′ℓsω_robs[:,0] .= sum(f_radial_0_robs[:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1) 
 			    			end
@@ -4130,21 +4056,19 @@ module kernel
 			    				fℓ′ℓsω_robs[:,1] .= sum(f_radial_1_robs[:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
 			    			end
 
-			    			end # timing
-
 			    			if isodd(ℓ+ℓ′+s) && -1 in K_components
 			    				# tangential - component (K⁺ - K⁻), only for odd l+l′+s
 								# only imag part calculated, the actual kernel is iK
 								# extra factor of 2 from the (1 - (-1)^(ℓ+ℓ′+s)) term
 								@. K[:,-1,s] += 2 * dω/2π * ω^3 * Powspec(ω) * Nℓ′ℓs(ℓ′,ℓ,s) * 
-					     					real(conj(h_ω_arr[ω_ind]) *
+					     					2real(conj(h_ω_arr[ω_ind]) *
 					     					(conj(fℓ′ℓsω_robs[:,1])*G_robs_rsrc*conj(Yℓ′ℓ_s0_n1n2[s]) 
 					     						+ conj(G_robs_rsrc)*fℓ′ℓsω_robs[:,1]*Yℓ′ℓ_s0_n2n1[s]) )
 			    			end
 
 			    			if 0 in K_components
 						     	@. K[:,0,s] +=  dω/2π * ω^3 * Powspec(ω) * Nℓ′ℓs(ℓ′,ℓ,s) * 
-						     					real(conj(h_ω_arr[ω_ind]) *
+						     					2real(conj(h_ω_arr[ω_ind]) *
 						     					(conj(fℓ′ℓsω_robs[:,0])*G_robs_rsrc*conj(Yℓ′ℓ_s0_n1n2[s]) 
 						     						+ conj(G_robs_rsrc)*fℓ′ℓsω_robs[:,0]*Yℓ′ℓ_s0_n2n1[s]) )
 						    end
@@ -4153,71 +4077,40 @@ module kernel
 								# tangential + component (K⁺ + K⁻), only for even l+l′+s
 								# extra factor of 2 from the (1 + (-1)^(ℓ+ℓ′+s)) term
 								@. K[:,1,s] +=  2 * dω/2π * ω^3 * Powspec(ω) * Nℓ′ℓs(ℓ′,ℓ,s) * 
-					     					real(conj(h_ω_arr[ω_ind]) *
+					     					2real(conj(h_ω_arr[ω_ind]) *
 					     					(conj(fℓ′ℓsω_robs[:,1])*G_robs_rsrc*conj(Yℓ′ℓ_s0_n1n2[s]) 
 					     						+ conj(G_robs_rsrc)*fℓ′ℓsω_robs[:,1]*Yℓ′ℓ_s0_n2n1[s]) )
 							end
 					    end
-						end
 					end
 				end
 
-				fits_init_time += @elapsed close(Gsrc_file)
-				
+				close(Gsrc_file)
 			end
 
-			radial_time += @elapsed @. K *=  4r^2 * ρ
+			@. K *= 2r^2 * ρ
 
-			fits_init_time += @elapsed begin
 			for (procid,fitsfile) in Gobs_files
 				close(fitsfile)
 			end
-			end # fits_init_time
 
-			end # total_proc_time
-
-			# Libdl.dlclose(lib)
-
-			return K
-			# return (parallel_utilities_time,mode_related_stuff_time,
-			# 		fits_init_time,fits_read_time,
-			# 		biposh_time,radial_time,sum_over_s_time,total_proc_time,K)
-		end
-
-		procs = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs)
-
-		# debugging
-		# @sync for (rank,p) in enumerate(procs)
-		# 	@async begin
-		# 		println(fetch(@spawnat p summodes(rank)))
-		# 	end
-		# end
-
-		K = zeros(1:nr,K_components,1:s_max)
-		total_time = @elapsed @sync for (rank,p) in enumerate(procs)
-			@async begin
-				
-				# fetch_time = @elapsed parallel_utilities_time,mode_related_stuff_time,
-				# fits_init_time,fits_read_time,
-				# biposh_time,radial_time,sum_over_s_time,total_proc_time,Ki = remotecall_fetch(summodes,p,rank)
-
-				# K .+= Ki
-				# println(rank," putil ",round(parallel_utilities_time,digits=2),
-				# 	" mode ",round(mode_related_stuff_time,digits=2),
-				# 	" fits init ",round(fits_init_time,digits=2),
-				# 	" fits read ",round(fits_read_time,digits=2),
-				# 	" biposh ",round(biposh_time,digits=2),
-				# 	" radial ",round(radial_time,digits=2),
-				# 	" sum s ",round(sum_over_s_time,digits=2),
-				# 	" proc ",round(total_proc_time,digits=2),
-				# 	" fetch ",round(fetch_time-total_proc_time,digits=2))
-				K .+= remotecall_fetch(summodes,p,rank)
+			if rank_node == 0
+				for n in 1:np_node-1
+					K .+= take!(channel_on_node)
+				end
+				put!(channel_on_node,K)
+			else
+				put!(channel_on_node,K)
 			end
-		end
-		println("Total time ",total_time)
 
-		return K
+			return nothing
+		end
+		
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
+
+		T = OffsetArray{Float64,3,Array{Float64,3}} # type of arrays to be added to the channels
+		return pmapsum(T,summodes,procs_used)
 	end
 
 	function meridional_flow_stream_function_kernel_srange(x1::SphericalPoint,x2::SphericalPoint,s_max;kwargs...)
