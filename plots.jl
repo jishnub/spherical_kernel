@@ -4,16 +4,16 @@ using PyCall,DelimitedFiles,OffsetArrays
 
 SCRATCH = ENV["SCRATCH"]
 
-function plot_traveltimes_validation(;nϕ=10,ℓ_range=20:100,bounce_no=1)
+const Rsun = Main.crosscov.Rsun
+
+function plot_traveltimes_validation(;nϕ=10,kwargs...)
 	ϕ2_deg = collect(LinRange(45,75,nϕ))
 	ϕ2_arr = ϕ2_deg*π/180
 	n1 = Point2D(π/2,0)
 	n2_arr = [Point2D(π/2,ϕ2) for ϕ2 in ϕ2_arr]
 
-	# δτ_rot2 = zeros(nϕ)
-
-	δτ_FB = Main.kernel.δτ_uniform_rotation_firstborn_int_K_u(n1,n2_arr,bounce_no=bounce_no,ℓ_range=ℓ_range)
-	δτ_rot2 = Main.kernel.δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1,n2_arr,bounce_no=bounce_no,ℓ_range=ℓ_range)
+	δτ_FB = Main.kernel.δτ_uniform_rotation_firstborn_int_K_u(n1,n2_arr,kwargs...)
+	δτ_rot2 = Main.kernel.δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1,n2_arr,kwargs...)
 
 	ϕ2_arr .*= 180/π # convert to degrees
 	plot(ϕ2_arr,δτ_rot2,"p-",label="Rotated frame, linearized",lw=0.6)
@@ -121,12 +121,11 @@ function plot_Ks0()
 	xlabel(L"$r/R_\odot$",fontsize=12)
 
 	tight_layout()
-	
 end
 
-function plot_time_distance(;t_max=6,t_min=0.3,ℓ_range = 20:99,nϕ=maximum(ℓ_range)) # time in hours
-	r_src=Main.crosscov.Rsun-75e5
-	Gfn_path_src = Main.Greenfn_radial.Gfn_path_from_source_radius(r_src)
+function plot_time_distance(;t_max=6,t_min=0.3,ℓ_range = 20:100,nϕ=maximum(ℓ_range),r_obs=Rsun-75e5) # time in hours
+
+	Gfn_path_src = Main.Greenfn_radial.Gfn_path_from_source_radius(r_obs)
 	@load joinpath(Gfn_path_src,"parameters.jld2") dt Nt
 
 	t_max_ind = Int(floor(t_max*60^2/dt))+1
@@ -137,7 +136,7 @@ function plot_time_distance(;t_max=6,t_min=0.3,ℓ_range = 20:99,nϕ=maximum(ℓ
 
 	ϕ = LinRange(5,90,nϕ).*π/180
 
-	C = Main.crosscov.CΔϕt(;τ_ind_arr=t_inds,ℓ_range=ℓ_range,Δϕ_arr=ϕ)
+	C = Main.crosscov.CΔϕt(τ_ind_arr=t_inds,ℓ_range=ℓ_range,Δϕ_arr=ϕ)
 	C = copy(transpose(C))
 	C60 = Main.crosscov.Ct(π/3,ℓ_range=ℓ_range)[t_inds]
 
@@ -243,4 +242,39 @@ function plot_kernel_timing_scaling_benchmark(;smax=10,ℓ_range=20:20:100)
 	xlabel("Maximum ℓ")
 	ylabel("Evaluation time [sec]")
 	legend(loc="best")
+end
+
+function plot_h(x1,x2;kwargs...)
+	
+	Gfn_path_x1 = Gfn_path_from_source_radius(x1)
+	@load joinpath(Gfn_path_x1,"parameters.jld2") ν_full ν_start_zeros ν_arr Nt dt dν Nν_Gfn
+
+	Cω_x1x2 = Cω(x1,x2,ℓ_range=ℓ_range,r_src=r_src)
+
+	C_t = brfft(Cω_x1x2,Nt).*dν
+
+	h = Main.crosscov.h(x1,x2;kwargs...)
+	plt.subplot(411)
+	plt.plot(ν_arr,real(Cω_x1x2[ν_start_zeros .+ (1:Nν_Gfn)]))
+	plt.title("C(x₁,x₂,ω)")
+
+	ax2=plt.subplot(412)
+	plt.plot((1:Nt).*dt,C_t,color="black")
+	plt.axvline(h.t_inds_range[1]*dt,ls="solid")
+	plt.axvline(h.t_inds_range[end]*dt,ls="solid")
+	plt.title("C(x₁,x₂,t)")
+
+	plt.subplot(413,sharex=ax2)
+	plt.plot((1:Nt).*dt,h.h_t,color="black")
+	plt.xlim(0,60^2*6)
+
+	plt.title("h(x₁,x₂,t)")
+
+	plt.subplot(414)
+	plt.plot(ν_arr,imag(h.h_ω[ν_start_zeros .+ (1:Nν_Gfn)]),label="imag")
+	plt.plot(ν_arr,real(h.h_ω[ν_start_zeros .+ (1:Nν_Gfn)]),label="real")
+	plt.legend(loc="best")
+	plt.title("h(x₁,x₂,ω)")
+
+	plt.tight_layout()
 end
