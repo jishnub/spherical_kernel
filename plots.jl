@@ -1,31 +1,67 @@
 using PyPlot,PointsOnASphere,LaTeXStrings,LinearAlgebra,FITSIO,JLD2
-using PyCall,DelimitedFiles,OffsetArrays
+using PyCall,DelimitedFiles,OffsetArrays,DataFrames,CSV,Printf,ProgressMeter
 @pyimport matplotlib.ticker as ticker
 
 SCRATCH = ENV["SCRATCH"]
 
 const Rsun = Main.crosscov.Rsun
 
-function plot_traveltimes_validation(;nϕ=10,kwargs...)
+function plot_traveltimes_validation(;nϕ=5,bounce_no=1,kwargs...)
+	
+	r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+	Gfn_path_src = Main.crosscov.Gfn_path_from_source_radius(r_src)
+	@load joinpath(Gfn_path_src,"parameters.jld2") Nt dt dν
+
 	ϕ2_deg = collect(LinRange(45,75,nϕ))
 	ϕ2_arr = ϕ2_deg*π/180
 	n1 = Point2D(π/2,0)
 	n2_arr = [Point2D(π/2,ϕ2) for ϕ2 in ϕ2_arr]
 
-	δτ_FB = Main.kernel.δτ_uniform_rotation_firstborn_int_K_u(n1,n2_arr,kwargs...)
-	δτ_rot2 = Main.kernel.δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1,n2_arr,kwargs...)
+	δτ_FB = zeros(length(n2_arr))
+	δτ_rot2 = zeros(length(n2_arr))
+
+	t_inds = Vector{UnitRange}(undef,length(n2_arr))
+
+	@showprogress 0.5 "δτ rotated frame " for (ind,n2) in enumerate(n2_arr)
+		Cω,∂ϕ₂Cω = Main.crosscov.Cω_∂ϕ₂Cω(n1,n2;kwargs...)
+		Ct = Main.crosscov.Ct(Cω,dν)
+		∂ϕ₂Ct = Main.crosscov.∂ϕ₂Ct(∂ϕ₂Cω,dν)
+		t_inds[ind] = Main.crosscov.time_window_by_fitting_bounce_peak(Ct,n1,n2,
+								dt=dt,Nt=Nt,bounce_no=bounce_no)
+		δτ_rot2[ind] = Main.kernel.δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(
+								n1,n2,τ_ind_arr=t_inds[ind],kwargs...)
+	end
+	println("Finished computing rotated-frame travel times")
+
+	@time δτ_FB .= Main.kernel.δτ_uniform_rotation_firstborn_int_K_u(n1,n2_arr,kwargs...)
+	println("Finished computing first Born travel times")	
+
+	percentage_diff = (δτ_rot2-δτ_FB)./δτ_rot2.*100
 
 	ϕ2_arr .*= 180/π # convert to degrees
-	plot(ϕ2_arr,δτ_rot2,"p-",label="Rotated frame, linearized",lw=0.6)
-	plot(ϕ2_arr,δτ_FB,"o--",label="First Born approx")
-	xlabel("angular separation [degrees]",fontsize=12)
+
+	ax1 = subplot2grid((3,1),(0,0),rowspan=2)
+	plot(ϕ2_arr,δτ_rot2,"p-",label="Rotated frame",lw=0.6)
+	plot(ϕ2_arr,δτ_FB,"o--",label="First Born")
 	ylabel("δτ [sec]",fontsize=12)
 	legend(loc="best")
+
+	ax2 = subplot2grid((3,1),(2,0))
+	plot(ϕ2_arr,percentage_diff,"o-",ms=4,zorder=2)
+	ylabel("Difference",fontsize=12)
+	xlabel("Angular separation [degrees]",fontsize=12)
+	ax2[:set_yticklabels]([(@sprintf "%.2f" x)*"%" for x in ax2[:get_yticks]()])
+	ax2[:axhline](0,ls="dotted",color="black",zorder=0)
+
+	tight_layout()
+
 	savefig("traveltimes_validation.png")
 
-	dτ_arr = hcat(ϕ2_deg,δτ_FB,δτ_rot2,(δτ_rot2-δτ_FB)./δτ_rot2.*100)
+	dτ_arr = DataFrame(dist=ϕ2_deg,t_inds=t_inds,dt_FB=δτ_FB,dt_rot=δτ_rot2,
+		percentage_diff=percentage_diff)
 
-	writedlm("travel_time_shifts_uniform_rotation",dτ_arr)
+	CSV.write("travel_time_shifts_uniform_rotation",dτ_arr,delim=' ')
+
 	dτ_arr
 end
 
