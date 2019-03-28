@@ -1,6 +1,7 @@
-using PyPlot,PointsOnASphere,LaTeXStrings,LinearAlgebra,FITSIO,JLD2
+using PyPlot,PointsOnASphere,LaTeXStrings,LinearAlgebra,FITSIO,JLD2,FFTW
 using PyCall,DelimitedFiles,OffsetArrays,DataFrames,CSV,Printf,ProgressMeter
 @pyimport matplotlib.ticker as ticker
+import Main.crosscov: @fft_ω_to_t,@fft_t_to_ω
 
 SCRATCH = ENV["SCRATCH"]
 
@@ -10,9 +11,9 @@ function plot_traveltimes_validation(;nϕ=5,bounce_no=1,kwargs...)
 	
 	r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
 	Gfn_path_src = Main.crosscov.Gfn_path_from_source_radius(r_src)
-	@load joinpath(Gfn_path_src,"parameters.jld2") Nt dt dν
+	@load joinpath(Gfn_path_src,"parameters.jld2") Nt dt dν Nν
 
-	ϕ2_deg = collect(LinRange(45,75,nϕ))
+	ϕ2_deg = collect(LinRange(41,59,nϕ))
 	ϕ2_arr = ϕ2_deg*π/180
 	n1 = Point2D(π/2,0)
 	n2_arr = [Point2D(π/2,ϕ2) for ϕ2 in ϕ2_arr]
@@ -22,19 +23,24 @@ function plot_traveltimes_validation(;nϕ=5,bounce_no=1,kwargs...)
 
 	t_inds = Vector{UnitRange}(undef,length(n2_arr))
 
+	Cω_arr = zeros(ComplexF64,Nν,length(n2_arr))
+	hω_arr = zeros(ComplexF64,Nν,length(n2_arr))
 	@showprogress 0.5 "δτ rotated frame " for (ind,n2) in enumerate(n2_arr)
 		Cω,∂ϕ₂Cω = Main.crosscov.Cω_∂ϕ₂Cω(n1,n2;kwargs...)
+		Cω_arr[:,ind] = Cω
 		Ct = Main.crosscov.Ct(Cω,dν)
 		∂ϕ₂Ct = Main.crosscov.∂ϕ₂Ct(∂ϕ₂Cω,dν)
 		t_inds[ind] = Main.crosscov.time_window_by_fitting_bounce_peak(Ct,n1,n2,
 								dt=dt,Nt=Nt,bounce_no=bounce_no)
+		hω_arr[:,ind] = Main.crosscov.hω(Cω,n1,n2;τ_ind_arr=t_inds[ind],kwargs...)
 		δτ_rot2[ind] = Main.kernel.δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(
-								n1,n2,τ_ind_arr=t_inds[ind],kwargs...)
+								n1,n2;τ_ind_arr=t_inds[ind],hω=hω_arr[:,ind],kwargs...)
 	end
 	println("Finished computing rotated-frame travel times")
 
-	@time δτ_FB .= Main.kernel.δτ_uniform_rotation_firstborn_int_K_u(n1,n2_arr,kwargs...)
-	println("Finished computing first Born travel times")	
+	@time δτ_FB .= Main.kernel.δτ_uniform_rotation_firstborn_int_K_u(n1,n2_arr;
+									hω_arr=hω_arr,kwargs...)
+	println("Finished computing first Born travel times")
 
 	percentage_diff = (δτ_rot2-δτ_FB)./δτ_rot2.*100
 
@@ -55,12 +61,11 @@ function plot_traveltimes_validation(;nϕ=5,bounce_no=1,kwargs...)
 
 	tight_layout()
 
-	savefig("traveltimes_validation.png")
-
 	dτ_arr = DataFrame(dist=ϕ2_deg,t_inds=t_inds,dt_FB=δτ_FB,dt_rot=δτ_rot2,
 		percentage_diff=percentage_diff)
 
-	CSV.write("travel_time_shifts_uniform_rotation",dτ_arr,delim=' ')
+	# savefig("traveltimes_validation.png")
+	# CSV.write("travel_time_shifts_uniform_rotation",dτ_arr,delim=' ')
 
 	dτ_arr
 end
@@ -282,35 +287,37 @@ end
 
 function plot_h(x1,x2;kwargs...)
 	
-	Gfn_path_x1 = Gfn_path_from_source_radius(x1)
-	@load joinpath(Gfn_path_x1,"parameters.jld2") ν_full ν_start_zeros ν_arr Nt dt dν Nν_Gfn
+	r_src = get(kwargs,:r_src,Rsun-75e5)
+	Gfn_path_src = Main.crosscov.Gfn_path_from_source_radius(r_src)
+	@load joinpath(Gfn_path_src,"parameters.jld2") ν_start_zeros ν_arr Nt dt dν Nν_Gfn
 
-	Cω_x1x2 = Cω(x1,x2,ℓ_range=ℓ_range,r_src=r_src)
+	Cω_x1x2 = Main.crosscov.Cω(x1,x2;kwargs...)
+	C_t = @fft_ω_to_t(Cω_x1x2)
+	τ_ind_arr = Main.crosscov.time_window_by_fitting_bounce_peak(C_t,x1,x2;dt=dt,kwargs...)
+	ht = Main.crosscov.ht(Cω_x1x2,x1,x2;τ_ind_arr=τ_ind_arr,kwargs...)
+	hω = @fft_t_to_ω(ht)
 
-	C_t = brfft(Cω_x1x2,Nt).*dν
+	subplot(411)
+	plot(ν_arr,real(Cω_x1x2[ν_start_zeros .+ (1:Nν_Gfn)]))
+	title("C(x₁,x₂,ω)")
 
-	h = Main.crosscov.h(x1,x2;kwargs...)
-	plt.subplot(411)
-	plt.plot(ν_arr,real(Cω_x1x2[ν_start_zeros .+ (1:Nν_Gfn)]))
-	plt.title("C(x₁,x₂,ω)")
+	ax2=subplot(412)
+	plot((1:Nt).*dt,C_t,color="black")
+	axvline(τ_ind_arr[1]*dt,ls="solid")
+	axvline(τ_ind_arr[end]*dt,ls="solid")
+	title("C(x₁,x₂,t)")
 
-	ax2=plt.subplot(412)
-	plt.plot((1:Nt).*dt,C_t,color="black")
-	plt.axvline(h.t_inds_range[1]*dt,ls="solid")
-	plt.axvline(h.t_inds_range[end]*dt,ls="solid")
-	plt.title("C(x₁,x₂,t)")
+	subplot(413,sharex=ax2)
+	plot((1:Nt).*dt,ht,color="black")
+	xlim(0,60^2*6)
 
-	plt.subplot(413,sharex=ax2)
-	plt.plot((1:Nt).*dt,h.h_t,color="black")
-	plt.xlim(0,60^2*6)
+	title("h(x₁,x₂,t)")
 
-	plt.title("h(x₁,x₂,t)")
+	subplot(414)
+	plot(ν_arr,imag(hω[ν_start_zeros .+ (1:Nν_Gfn)]),label="imag")
+	plot(ν_arr,real(hω[ν_start_zeros .+ (1:Nν_Gfn)]),label="real")
+	legend(loc="best")
+	title("h(x₁,x₂,ω)")
 
-	plt.subplot(414)
-	plt.plot(ν_arr,imag(h.h_ω[ν_start_zeros .+ (1:Nν_Gfn)]),label="imag")
-	plt.plot(ν_arr,real(h.h_ω[ν_start_zeros .+ (1:Nν_Gfn)]),label="real")
-	plt.legend(loc="best")
-	plt.title("h(x₁,x₂,ω)")
-
-	plt.tight_layout()
+	tight_layout()
 end

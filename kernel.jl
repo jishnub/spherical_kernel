@@ -10,7 +10,7 @@ module kernel
 	@reexport using Main.crosscov
 	@pyimport scipy.integrate as integrate
 	import WignerSymbols: clebschgordan
-	using Libdl, WignerD, FileIO
+	using Libdl, WignerD, FileIO,ProgressMeter
 
 	################################################################################################################
 	# Validation for uniform rotation
@@ -18,27 +18,32 @@ module kernel
 
 	uniform_rotation_uplus(Ω_rot=20e2/Rsun) = @. √(4π/3)*im*Ω_rot*r
 
-	function kernel_uniform_rotation_uplus(x1::Point3D,x2::Point3D;ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,r_src=Rsun-75e5)
+	function kernel_uniform_rotation_uplus(x1::Point3D,x2::Point3D;
+		ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,kwargs...)
 		
+		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
 		Gfn_path_x2 = Gfn_path_from_source_radius(x2)
 
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs dν ν_start_zeros
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs dν ν_start_zeros dω Nν_Gfn
 
 		num_procs_obs1 = load(joinpath(Gfn_path_x1,"parameters.jld2"),"num_procs")
 		num_procs_obs2 = load(joinpath(Gfn_path_x2,"parameters.jld2"),"num_procs")
 
-		Nν_Gfn = length(ν_arr)
 		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
 		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
-		h_ω_arr = hω(x1,x2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src)[ν_start_zeros .+ ν_ind_range] # only in range
+		h_ω = get(kwargs,:hω,nothing)
+		if isnothing(h_ω)
+			h_ω = hω(x1,x2;bounce_no=bounce_no,kwargs...)
+		end
+		h_ω = h_ω[ν_start_zeros .+ ν_ind_range]
+		# h_ω_arr = hω(x1,x2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src)[ν_start_zeros .+ ν_ind_range] # only in range
 
 		r₁_ind = argmin(abs.(r .- x1.r))
 		r₂_ind = argmin(abs.(r .- x2.r))
-
-		dω = dν*2π
 
 		function summodes(rank,rank_node,np_node,channel_on_node)
 		
@@ -100,14 +105,15 @@ module kernel
 			    		@. Gobs2[:,1] = G[:,1,2] + im*G[:,2,2]
 
 			    		@. δG_r₂_rsrc = Gsrc[:,0] * Gobs2[:,0] - Gsrc[:,0] * Gobs2[:,1]/Ω(ℓ,0) -
-		    						Gsrc[:,1]/Ω(ℓ,0) * Gobs2[:,0] + (ℓ*(ℓ+1)-1) * Gsrc[:,1]/Ω(ℓ,0) * Gobs2[:,1]/Ω(ℓ,0)
+		    						Gsrc[:,1]/Ω(ℓ,0) * Gobs2[:,0] + 
+		    						(ℓ*(ℓ+1)-1) * Gsrc[:,1]/Ω(ℓ,0) * Gobs2[:,1]/Ω(ℓ,0)
 
 					    close(Gobs2_file)
 					else
 					    @. δG_r₂_rsrc = δG_r₁_rsrc
 					end
 
-					@. K +=  dω/2π * ω^3 * Powspec(ω) * (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * imag(h_ω_arr[ω_ind]) * 
+					@. K +=  dω/2π * ω^3 * Powspec(ω) * (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * imag(h_ω[ω_ind]) * 
 								(conj(δG_r₁_rsrc)*G_r₂_rsrc + conj(G_r₁_rsrc)*δG_r₂_rsrc) 
 
 				end
@@ -134,24 +140,33 @@ module kernel
 		pmapsum(Vector{ComplexF64},summodes,procs_used)
 	end
 
-	function kernel_uniform_rotation_uplus(n1::Point2D,n2::Point2D;ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,r_src=Rsun-75e5,r_obs=Rsun-75e5)
+	function kernel_uniform_rotation_uplus(n1::Point2D,n2::Point2D;
+		ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,kwargs...)
+
+		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_obs = get(kwargs,:r_src,Rsun-75e5) :: Float64
+
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_obs = Gfn_path_from_source_radius(r_obs)
 
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs dν ν_start_zeros
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs dν dω ν_start_zeros Nν_Gfn
 
 		num_procs_obs = load(joinpath(Gfn_path_obs,"parameters.jld2"),"num_procs")
 
-		Nν_Gfn = length(ν_arr)
 		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
 		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
 
-		dω = dν*2π
-
 		∂ϕ₂Pl_cosχ = dPl(cosχ(n1,n2),ℓmax=ℓ_arr[end]).*∂ϕ₂cosχ(n1,n2)
-		h_ω_arr = hω(n1,n2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src,r_obs=r_obs)[ν_start_zeros .+ ν_ind_range] # only in range
+		
+		h_ω = get(kwargs,:hω,nothing)
+		if isnothing(h_ω)
+			h_ω = hω(n1,n2;bounce_no=bounce_no,kwargs...)
+		end
+		h_ω = h_ω[ν_start_zeros .+ ν_ind_range]
+
+		# h_ω = hω(n1,n2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src,r_obs=r_obs) # only in range
 
 		function summodes(rank,rank_node,np_node,channel_on_node)
 		
@@ -197,10 +212,12 @@ module kernel
 		    		@. Gobs[:,1] = G[:,1,2] + im*G[:,2,2]
 
 		    		@. δG_robs_rsrc = Gsrc[:,0] * Gobs[:,0] - Gsrc[:,0] * Gobs[:,1]/Ω(ℓ,0) -
-		    						Gsrc[:,1]/Ω(ℓ,0) * Gobs[:,0] + (ℓ*(ℓ+1)-1) * Gsrc[:,1]/Ω(ℓ,0) * Gobs[:,1]/Ω(ℓ,0)
+		    						Gsrc[:,1]/Ω(ℓ,0) * Gobs[:,0] + 
+		    						(ℓ*(ℓ+1)-1) * Gsrc[:,1]/Ω(ℓ,0) * Gobs[:,1]/Ω(ℓ,0)
 
 
-					@. K +=  dω/2π * ω^3 * Powspec(ω) * (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * imag(h_ω_arr[ω_ind]) * 
+					@. K +=  dω/2π * ω^3 * Powspec(ω) * 
+							(2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * imag(h_ω[ω_ind]) * 
 								2real(conj(δG_robs_rsrc)*G_robs_rsrc) 
 
 				end
@@ -228,21 +245,22 @@ module kernel
 		pmapsum(Vector{ComplexF64},summodes,procs_used)
 	end
 	
-	function kernel_uniform_rotation_uplus(n1::Point2D,n2_arr::Vector{<:Point2D};ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,r_src=Rsun-75e5,r_obs=Rsun-75e5)
+	function kernel_uniform_rotation_uplus(n1::Point2D,n2_arr::Vector{<:Point2D};
+		Cω_arr=Array{Nothing,2}(undef,1,length(n2_arr)),
+		hω_arr=nothing,
+		ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,r_src=Rsun-75e5,r_obs=Rsun-75e5,kwargs...)
+
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_obs = Gfn_path_from_source_radius(r_obs)
 
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs dν ν_start_zeros
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs dω ν_start_zeros
 
 		num_procs_obs = load(joinpath(Gfn_path_obs,"parameters.jld2"),"num_procs")
 
-		Nν_Gfn = length(ν_arr)
 		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
 		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
-
-		dω = dν*2π
 
 		function summodes(rank,rank_node,np_node,channel_on_node)
 		
@@ -260,6 +278,8 @@ module kernel
 			G = zeros(nr,2,2)
 			Gsrc = zeros(ComplexF64,nr,0:1)
 			Gobs = zeros(ComplexF64,nr,0:1)
+
+			∂ϕ₂Pl_cosχ = zeros(0:ℓ_arr[end])
 
 			for (proc_id,Gsrc_file) in Gfn_fits_files_src
 
@@ -279,7 +299,8 @@ module kernel
 		    		G_robs_rsrc = Gsrc[r_obs_ind,0]
 
 		    		# Green function about receiver location
-		    		proc_id_mode_Gobs,ℓω_index_Gobs_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,(ℓ,ω_ind),num_procs_obs)
+		    		proc_id_mode_Gobs,ℓω_index_Gobs_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,
+		    												(ℓ,ω_ind),num_procs_obs)
 		    		Gobs_file = Gfn_fits_files_obs[proc_id_mode_Gobs]
 
 		    		G .= read(Gobs_file[1],:,:,1:2,1,1,ℓω_index_Gobs_file)
@@ -287,15 +308,16 @@ module kernel
 		    		@. Gobs[:,1] = G[:,1,2] + im*G[:,2,2]
 
 		    		@. δG_robs_rsrc = Gsrc[:,0] * Gobs[:,0] - Gsrc[:,0] * Gobs[:,1]/Ω(ℓ,0) -
-		    						Gsrc[:,1]/Ω(ℓ,0) * Gobs[:,0] + (ℓ*(ℓ+1)-1) * Gsrc[:,1]/Ω(ℓ,0) * Gobs[:,1]/Ω(ℓ,0)
+		    						Gsrc[:,1]/Ω(ℓ,0) * Gobs[:,0] + 
+		    						(ℓ*(ℓ+1)-1) * Gsrc[:,1]/Ω(ℓ,0) * Gobs[:,1]/Ω(ℓ,0)
 
 					for (n2ind,n2) in enumerate(n2_arr)
-						∂ϕ₂Pl_cosχ = ∂ϕ₂Pl_cosχ_arr[n2ind]
-						h_ω_arr_n2 = h_ω_arr[n2ind]
 
-						@. K[:,n2ind] +=  dω/2π * ω^3 * Powspec(ω) * (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * imag(h_ω_arr_n2[ω_ind]) * 
-									2real(conj(δG_robs_rsrc)*G_robs_rsrc) 
-
+						@. K[:,n2ind] +=  dω/2π * ω^3 * Powspec(ω) * 
+										(2ℓ+1)/4π * ∂ϕ₂Pl_cosχ_arr[n2ind,ℓ] * 
+											imag(hω_arr[n2ind,ω_ind]) * 
+											2real(conj(δG_robs_rsrc)*G_robs_rsrc) 
+						put!(tracker,0)
 					end
 
 				end
@@ -317,13 +339,45 @@ module kernel
 			return nothing
 		end
 
-		∂ϕ₂Pl_cosχ_arr = [dPl(cosχ(n1,n2),ℓmax=ℓ_arr[end]).*∂ϕ₂cosχ(n1,n2) for n2 in n2_arr]
-		h_ω_arr = [hω(n1,n2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src,r_obs=r_obs)[ν_start_zeros .+ ν_ind_range] for n2 in n2_arr]# only in range
+		∂ϕ₂Pl_cosχ_arr = zeros(0:ℓ_arr[end],length(n2_arr))
+		for (n2ind,n2) in enumerate(n2_arr)
+			∂ϕ₂Pl_cosχ_arr[:,n2ind] = dPl(cosχ(n1,n2),ℓmax=ℓ_arr[end]).*∂ϕ₂cosχ(n1,n2)
+		end
+		∂ϕ₂Pl_cosχ_arr = copy(transpose(∂ϕ₂Pl_cosχ_arr))
+		τ_ind_arr = get(kwargs,:τ_ind_arr,nothing)
+		if  isnothing(hω_arr)
+			hω_arr = zeros(ν_ind_range,length(n2_arr))
+			for (n2ind,n2) in enumerate(n2_arr)
+				hω_arr[ν_ind_range,n2ind] = hω(Cω_arr[:,n2ind],n1,n2,bounce_no=bounce_no,
+				ℓ_range=ℓ_range,τ_ind_arr=τ_ind_arr[n2ind],
+				r_src=r_src,r_obs=r_obs)[:,ν_start_zeros .+ ν_ind_range]
+			end
+			hω_arr = copy(transpose(hω_arr))
+		else
+			hω_arr = copy(transpose(hω_arr))
+			hω_arr = hω_arr[:,ν_start_zeros .+ ν_ind_range]
+		end
 
 		procs_used = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs_used)
 
-		pmapsum(Array{ComplexF64,2},summodes,procs_used)
+		num_tasks = length(ℓ_range)*length(ν_ind_range)*length(n2_arr)
+
+		tracker = RemoteChannel(()->Channel{Int64}(100),1)
+
+		prog_bar = Progress(num_tasks,1,"First born travel times : ")
+
+		K₊ = zeros(ComplexF64,nr,length(n2_arr))
+		@sync begin
+			@async K₊ .= pmapsum(Array{ComplexF64,2},summodes,procs_used)
+			@async for n in 1:num_tasks
+					take!(tracker)
+					next!(prog_bar)
+				end
+		end
+
+		close(tracker)
+		return K₊
 	end
 
 	function δτ_uniform_rotation_firstborn_int_K_u(x1,x2;Ω_rot=20e2/Rsun,kwargs...)
@@ -336,11 +390,13 @@ module kernel
 	function δτ_uniform_rotation_firstborn_int_hω_δCω(n1,n2;Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
 		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") dν ν_start_zeros Nν_Gfn
+		@load joinpath(Gfn_path_src,"parameters.jld2") dω ν_start_zeros Nν_Gfn
 
-		h_ω = hω(n1,n2;bounce_no=bounce_no,kwargs...)[ν_start_zeros .+ (1:Nν_Gfn)] # only in range
-
-		dω = dν*2π
+		h_ω = get(kwargs,:hω,nothing)
+		if isnothing(h_ω)
+			h_ω = hω(n1,n2;bounce_no=bounce_no,kwargs...)
+		end
+		h_ω = h_ω[ν_start_zeros .+ (1:Nν_Gfn)] # only in range
 
 		δCω = δCω_uniform_rotation_firstborn_integrated_over_angle(n1,n2;
 			Ω_rot=Ω_rot,kwargs...)[ν_start_zeros .+ (1:Nν_Gfn)]
@@ -348,14 +404,18 @@ module kernel
 		δτ = sum(@. dω/2π * 2real(conj(h_ω)*δCω))
 	end
 
-	function δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1::Point2D,n2::Point2D;Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+	function δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1::Point2D,n2::Point2D;
+		Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+
 		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") dν ν_start_zeros Nν_Gfn
+		@load joinpath(Gfn_path_src,"parameters.jld2") dω ν_start_zeros Nν_Gfn
 
-		h_ω = hω(n1,n2;bounce_no=bounce_no,kwargs...)[ν_start_zeros .+ (1:Nν_Gfn)] # only in range
-
-		dω = dν*2π
+		h_ω = get(kwargs,:hω,nothing)
+		if isnothing(h_ω)
+			h_ω = hω(n1,n2;bounce_no=bounce_no,kwargs...)
+		end
+		h_ω = h_ω[ν_start_zeros .+ (1:Nν_Gfn)] # only in range
 
 		δCω = δCω_uniform_rotation_rotatedwaves_linearapprox(n1,n2;
 			Ω_rot=Ω_rot,kwargs...)[ν_start_zeros .+ (1:Nν_Gfn)]
@@ -363,22 +423,36 @@ module kernel
 		δτ = sum(@. dω/2π * 2real(conj(h_ω)*δCω))
 	end
 
-	function δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1::Point2D,n2::Point2D;Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+	function δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1::Point2D,n2::Point2D;
+		Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+
 		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt Nt dν
 
-		Cω_n1n2 = Cω(n1,n2,kwargs...)
+		Cω_n1n2 = Cω(n1,n2;kwargs...)
 		Ct_n1n2 = Ct(Cω_n1n2,dν)
 		τ_ind_arr = time_window_by_fitting_bounce_peak(Ct_n1n2,n1,n2,dt=dt,Nt=Nt,bounce_no=bounce_no)
-		h_t = ht(Cω_n1n2,n1,n2;bounce_no=bounce_no,kwargs...)[τ_ind_arr]
+
+		h_t = get(kwargs,:ht,nothing)
+		if isnothing(h_t)
+			h_ω = get(kwargs,:hω,nothing)
+			if isnothing(h_ω)
+				h_t = ht(Cω_n1n2,n1,n2;bounce_no=bounce_no,kwargs...)
+			else
+				h_t = @fft_ω_to_t(h_ω)
+			end
+		end
+		h_t = h_t[τ_ind_arr]
 
 		δC_t = δCt_uniform_rotation_rotatedwaves(n1,n2;Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,kwargs...)
 
 		δτ = sum(h_t.*δC_t.parent)*dt
 	end
 
-	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2::Point2D;Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2::Point2D;
+		Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+
 		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν Nt
@@ -390,29 +464,47 @@ module kernel
 		τ_ind_arr = get(kwargs,:τ_ind_arr,
 							time_window_by_fitting_bounce_peak(Ct_n1n2,
 								n1,n2,dt=dt,Nt=Nt,bounce_no=bounce_no))
-		h_t = ht(Cω_n1n2,n1,n2;τ_ind_arr=τ_ind_arr,kwargs...)[τ_ind_arr]
+		
+		h_t = get(kwargs,:ht,nothing)
+
+		if isnothing(h_t) 
+			h_ω = get(kwargs,:hω,nothing)
+			if isnothing(h_ω)
+				h_t = ht(Cω_n1n2,n1,n2;τ_ind_arr=τ_ind_arr,kwargs...)
+			else
+				h_t = @fft_ω_to_t(h_ω)	
+			end
+		end
+
+		h_t = h_t[τ_ind_arr]
 
 		δC_t = δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_n1n2;
 											Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,kwargs...)
-
 		δτ = sum(h_t.*δC_t)*dt
 	end
 
 	function traveltimes_validate(n1,n2;kwargs...)
 
-		δτ1 = δτ_uniform_rotation_firstborn_int_K_u(n1,n2;kwargs...)
+		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν
+
+		h_t = ht(n1,n2;kwargs...)
+		h_ω = @fft_t_to_ω(h_t)
+
+		δτ1 = δτ_uniform_rotation_firstborn_int_K_u(n1,n2;hω=h_ω,kwargs...)
 		@printf "%-50s %g\n" "First Born, ∫dr u(r) K(r)" round(δτ1,sigdigits=3)
 
-		δτ2 = δτ_uniform_rotation_firstborn_int_hω_δCω(n1,n2;kwargs...)
+		δτ2 = δτ_uniform_rotation_firstborn_int_hω_δCω(n1,n2;hω=h_ω,kwargs...)
 		@printf "%-50s %g\n" "First Born, ∫dω/2π h(ω) δC_FB(ω)" round(δτ2,sigdigits=3)
 
-		δτ3 = δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1,n2;kwargs...)
+		δτ3 = δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1,n2;hω=h_ω,kwargs...)
 		@printf "%-50s %g\n" "Rotated frame, ∫dω/2π h(ω) δC_R_lin(ω)" round(δτ3,sigdigits=3)
 
-		δτ4 = δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1,n2;kwargs...)
+		δτ4 = δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1,n2;ht=h_t,kwargs...)
 		@printf "%-50s %g\n" "Rotated frame, ∫dt h(t) δC_R(t)" round(δτ4,sigdigits=3)
 
-		δτ5 = δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1,n2;kwargs...)
+		δτ5 = δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1,n2;ht=h_t,kwargs...)
 		@printf "%-50s %g\n" "Rotated frame, ∫dt h(t) δC_R_lin(t)" round(δτ5,sigdigits=3)
 	end
 
@@ -1033,20 +1125,20 @@ module kernel
 	end
 end
 
-module kernel3D
-	using Main.kernel
-	import WignerD: Ylmatrix
+# module kernel3D
+# 	using Main.kernel
+# 	import WignerD: Ylmatrix
 
-	function axisymmetric_flow_kernels_rθ_slice(x1::SphericalPoint,x2::SphericalPoint,s_max;kwargs...)
-		Kjlm_r = flow_kernels_srange(x1,x2,s_max;kwargs...)
-		θ_arr = LinRange(0,π,nθ)
-		# Slice at ϕ=0
-		n_arr = [Point2D(θ,0) for θ in θ_arr]
+# 	function axisymmetric_flow_kernels_rθ_slice(x1::SphericalPoint,x2::SphericalPoint,s_max;kwargs...)
+# 		Kjlm_r = flow_kernels_srange(x1,x2,s_max;kwargs...)
+# 		θ_arr = LinRange(0,π,nθ)
+# 		# Slice at ϕ=0
+# 		n_arr = [Point2D(θ,0) for θ in θ_arr]
 
-		K2D_r_θ = zeros(size(Kjlm_r,1))
+# 		K2D_r_θ = zeros(size(Kjlm_r,1))
 
-		# The 3D kernel is given by ∑ₛₙ Ks0n(r)* Ys0n(θ,ϕ)
+# 		# The 3D kernel is given by ∑ₛₙ Ks0n(r)* Ys0n(θ,ϕ)
 
 
-	end
-end
+# 	end
+# end

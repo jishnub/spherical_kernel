@@ -6,11 +6,11 @@ include("./greenfn.jl")
 
 module crosscov
 
-	using Reexport,FFTW,DSP
+	using Reexport,DSP
 	@reexport using Main.Greenfn_radial
 	import Main.Greenfn_radial: Gfn_path_from_source_radius
 
-	@reexport using PyCall
+	@reexport using PyCall,FFTW
 	@pyimport scipy.integrate as integrate
 
 	@reexport using Legendre,PointsOnASphere,TwoPointFunctions,VectorFieldsOnASphere
@@ -21,6 +21,8 @@ module crosscov
 	export δCω_uniform_rotation_rotatedwaves_linearapprox
 	export δCω_uniform_rotation_rotatedwaves,δCt_uniform_rotation_rotatedwaves,δCt_uniform_rotation_rotatedwaves_linearapprox
 	export intersect_fallback,time_window_by_fitting_bounce_peak,time_window_bounce_filter
+	export @fft_ω_to_t,@fft_t_to_ω
+
 	Gfn_path_from_source_radius(x::Point3D) = Gfn_path_from_source_radius(x.r)
 
 	function Gfn_fits_files(path,proc_id_range)
@@ -50,6 +52,17 @@ module crosscov
 	intersect_fallback(arr,default) = intersect(arr,default)
 
 	#######################################################################################################
+	
+	macro fft_t_to_ω(arr,dims=1) 
+		return esc(:(rfft($arr,$dims) .* dt))
+	end
+
+	macro fft_ω_to_t(arr,dims=1) 
+		return esc(:(brfft($arr,$2*(size($arr,1)-1),$dims) .* dν))
+	end
+
+	#######################################################################################################
+
 
 	function Cω(x1::Point3D,x2::Point3D;r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing,kwargs...)
 		
@@ -700,7 +713,7 @@ module crosscov
 		copy(transpose(Cω_arr))
 	end
 
-	function Cω_∂ϕ₂Cω(x1,x2;ℓ_range=nothing,ν_ind_range=nothing,r_src=Rsun-75e5,kwargs...)
+	function Cω_∂ϕ₂Cω(x1::Point3D,x2::Point3D;ℓ_range=nothing,ν_ind_range=nothing,r_src=Rsun-75e5,kwargs...)
 		
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
@@ -779,7 +792,7 @@ module crosscov
 		return Cω_arr[:,1],Cω_arr[:,2]
 	end
 
-	function Cω_∂ϕ₂Cω(n1,n2;ℓ_range=nothing,ν_ind_range=nothing,
+	function Cω_∂ϕ₂Cω(n1::Point2D,n2::Point2D;ℓ_range=nothing,ν_ind_range=nothing,
 		r_src=Rsun-75e5,r_obs=Rsun-75e5,kwargs...)
 		
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
@@ -855,38 +868,39 @@ module crosscov
 	# Time-domain cross-covariance
 	########################################################################################################
 
-	function Ct(x1::SphericalPoint,x2::SphericalPoint;kwargs...)
+	function Ct(x1,x2;kwargs...)
 		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
 
 		C = Cω(x1,x2;kwargs...)
-		brfft(C,Nt,1) .* dν
+		@fft_ω_to_t(C)
 	end
 
-	Ct(Cω_arr::Array{ComplexF64},dν) = brfft(Cω_arr,2*(size(Cω_arr,1)-1),1) .* dν
+	Ct(Cω_arr::Array{ComplexF64},dν) = @fft_ω_to_t(Cω_arr)
 
-	Ct(n1::T,n2_arr::Vector{<:T};kwargs...) where T<:SphericalPoint = Ct(n1,n2;kwargs...)
+	Ct(n1,n2_arr::Vector;kwargs...) = Ct(n1,n2;kwargs...)
 
-	function ∂ϕ₂Ct(x1::SphericalPoint,x2::SphericalPoint;kwargs...)
+	function ∂ϕ₂Ct(x1,x2;kwargs...)
 		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
 
 		C = ∂ϕ₂Cω(x1,x2;kwargs...)
-		brfft(C,Nt,1) .*dν
+		@fft_ω_to_t(C)
 	end
 
-	function ∂ϕ₂Ct(n1::T,n2_arr::Vector{<:T};kwargs...) where T<:SphericalPoint
+	function ∂ϕ₂Ct(n1,n2_arr::Vector;kwargs...)
 		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
 
 		C = ∂ϕ₂Cω(n1,n2_arr;kwargs...)
-		brfft(C,Nt,1) .*dν
+		# brfft(C,Nt,1) .*dν
+		@fft_ω_to_t(C)
 	end
 
-	∂ϕ₂Ct(∂ϕ₂Cω_arr::Array{ComplexF64},dν) = brfft(∂ϕ₂Cω_arr,2*(size(∂ϕ₂Cω_arr,1)-1),1) .* dν
+	∂ϕ₂Ct(∂ϕ₂Cω_arr::Array{ComplexF64},dν) = @fft_ω_to_t(∂ϕ₂Cω_arr)
 
 	########################################################################################################
 	# Cross-covariance at all distances on the equator, essentially the time-distance diagram
@@ -988,7 +1002,7 @@ module crosscov
 
 		CωΔϕ = copy(transpose(CΔϕω(r₁,r₂;kwargs...)))
 
-		C = brfft(CωΔϕ,Nt,1).*dν
+		C = @fft_ω_to_t(CωΔϕ)
 
 		if isnothing(τ_ind_arr)
 			return C
@@ -1010,7 +1024,7 @@ module crosscov
 			τ_ind_arr = 1:Nt
 		end
 	
-		return copy(transpose(brfft(CωΔϕ,Nt,1).*dν))[:,τ_ind_arr]
+		return copy(transpose(@fft_ω_to_t(CωΔϕ)))[:,τ_ind_arr]
 	end
 
 	Cmω(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;kwargs...) = fft(CΔϕω(r₁,r₂;kwargs...),1)
@@ -1456,12 +1470,14 @@ module crosscov
 
 		ω_full = 2π.*ν_full
 
-		C_t = Ct(Cω_x1x2,dν)
-		∂tCt = brfft(Cω_x1x2.*im.*ω_full,Nt,1).*dν
+		C_t = @fft_ω_to_t(Cω_x1x2)
+		∂tCt = @fft_ω_to_t(Cω_x1x2.*im.*ω_full)
 
-		τ_ind_arr = get(kwargs,:τ_ind_arr,
-					time_window_by_fitting_bounce_peak(C_t,args...;
-						dt=dt,Nt=Nt,bounce_no=bounce_no))
+		τ_ind_arr = get(kwargs,:τ_ind_arr,nothing)
+		if isnothing(τ_ind_arr)
+			τ_ind_arr = time_window_by_fitting_bounce_peak(C_t,args...;
+						dt=dt,Nt=Nt,bounce_no=bounce_no)
+		end
 
 		f_t = zeros(Nt)
 		f_t[τ_ind_arr] .= 1
@@ -1487,7 +1503,7 @@ module crosscov
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt
 
-		h_ω = rfft(ht(x1,x2;kwargs...),1) .* dt
+		h_ω = @fft_t_to_ω(ht(x1,x2;kwargs...))
 	end
 
 	function hω(Cω_x1x2::Array{ComplexF64},args...;kwargs...)
@@ -1496,8 +1512,10 @@ module crosscov
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt
 
-		h_ω = rfft(ht(Cω_x1x2,args...;kwargs...),1) .* dt
+		h_ω = @fft_t_to_ω(ht(Cω_x1x2,args...;kwargs...))
 	end
+
+	hω(::Array{Nothing},args...;kwargs...) = hω(args...;kwargs...)
 
 	##########################################################################################################################
 	# Add methods for computing cross-covariances in 2D (same obs radii) and 1D (same obs radii and on the equator)
