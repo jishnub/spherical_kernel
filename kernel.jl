@@ -10,7 +10,7 @@ module kernel
 	@reexport using Main.crosscov
 	@pyimport scipy.integrate as integrate
 	import WignerSymbols: clebschgordan
-	using Libdl, WignerD, FileIO,ProgressMeter
+	using Libdl, WignerD, FileIO
 
 	################################################################################################################
 	# Validation for uniform rotation
@@ -279,6 +279,8 @@ module kernel
 			Gsrc = zeros(ComplexF64,nr,0:1)
 			Gobs = zeros(ComplexF64,nr,0:1)
 
+			fr = zeros(ComplexF64,nr)
+
 			∂ϕ₂Pl_cosχ = zeros(0:ℓ_arr[end])
 
 			for (proc_id,Gsrc_file) in Gfn_fits_files_src
@@ -311,14 +313,13 @@ module kernel
 		    						Gsrc[:,1]/Ω(ℓ,0) * Gobs[:,0] + 
 		    						(ℓ*(ℓ+1)-1) * Gsrc[:,1]/Ω(ℓ,0) * Gobs[:,1]/Ω(ℓ,0)
 
-					for (n2ind,n2) in enumerate(n2_arr)
+		    		@. fr = dω/2π * ω^3 * Powspec(ω) * 2real(conj(δG_robs_rsrc)*G_robs_rsrc) 
 
-						@. K[:,n2ind] +=  dω/2π * ω^3 * Powspec(ω) * 
-										(2ℓ+1)/4π * ∂ϕ₂Pl_cosχ_arr[n2ind,ℓ] * 
-											imag(hω_arr[n2ind,ω_ind]) * 
-											2real(conj(δG_robs_rsrc)*G_robs_rsrc) 
-						put!(tracker,0)
+					for n2ind in 1:length(n2_arr)
+						@. K[:,n2ind] +=   fr * (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ_arr[n2ind,ℓ] * 
+											imag(hω_arr[n2ind,ω_ind])
 					end
+					
 
 				end
 			end
@@ -336,6 +337,7 @@ module kernel
 			else
 				put!(channel_on_node,K)
 			end
+			put!(tracker,0)
 			return nothing
 		end
 
@@ -344,36 +346,35 @@ module kernel
 			∂ϕ₂Pl_cosχ_arr[:,n2ind] = dPl(cosχ(n1,n2),ℓmax=ℓ_arr[end]).*∂ϕ₂cosχ(n1,n2)
 		end
 		∂ϕ₂Pl_cosχ_arr = copy(transpose(∂ϕ₂Pl_cosχ_arr))
-		τ_ind_arr = get(kwargs,:τ_ind_arr,nothing)
+		
+		
 		if  isnothing(hω_arr)
 			hω_arr = zeros(ν_ind_range,length(n2_arr))
+			τ_ind_arr = get(kwargs,:τ_ind_arr,nothing)
 			for (n2ind,n2) in enumerate(n2_arr)
 				hω_arr[ν_ind_range,n2ind] = hω(Cω_arr[:,n2ind],n1,n2,bounce_no=bounce_no,
 				ℓ_range=ℓ_range,τ_ind_arr=τ_ind_arr[n2ind],
-				r_src=r_src,r_obs=r_obs)[:,ν_start_zeros .+ ν_ind_range]
+				r_src=r_src,r_obs=r_obs)[ν_start_zeros .+ ν_ind_range]
 			end
-			hω_arr = copy(transpose(hω_arr))
+			hω_arr = copy(transpose(hω_arr)) :: Array{ComplexF64,2}
 		else
-			hω_arr = copy(transpose(hω_arr))
-			hω_arr = hω_arr[:,ν_start_zeros .+ ν_ind_range]
+			hω_arr = copy(transpose(hω_arr))[:,ν_start_zeros .+ ν_ind_range] :: Array{ComplexF64,2}
 		end
 
 		procs_used = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs_used)
 
-		num_tasks = length(ℓ_range)*length(ν_ind_range)*length(n2_arr)
-
 		tracker = RemoteChannel(()->Channel{Int64}(100),1)
 
-		prog_bar = Progress(num_tasks,1,"First born travel times : ")
+		prog_bar = Progress(num_workers,1,"First born travel times : ")
 
 		K₊ = zeros(ComplexF64,nr,length(n2_arr))
 		@sync begin
 			@async K₊ .= pmapsum(Array{ComplexF64,2},summodes,procs_used)
-			@async for n in 1:num_tasks
-					take!(tracker)
-					next!(prog_bar)
-				end
+			@async for n in 1:num_workers
+				take!(tracker)
+				next!(prog_bar)
+			end
 		end
 
 		close(tracker)
@@ -432,7 +433,7 @@ module kernel
 
 		Cω_n1n2 = Cω(n1,n2;kwargs...)
 		Ct_n1n2 = Ct(Cω_n1n2,dν)
-		τ_ind_arr = time_window_by_fitting_bounce_peak(Ct_n1n2,n1,n2,dt=dt,Nt=Nt,bounce_no=bounce_no)
+		τ_ind_arr = time_window_indices_by_fitting_bounce_peak(Ct_n1n2,n1,n2,dt=dt,Nt=Nt,bounce_no=bounce_no)
 
 		h_t = get(kwargs,:ht,nothing)
 		if isnothing(h_t)
@@ -451,36 +452,81 @@ module kernel
 	end
 
 	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2::Point2D;
-		Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+		Ω_rot=20e2/Rsun,bounce_no=1,τ_ind_arr=nothing,kwargs...)
 
 		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν Nt
 
-		Cω_n1n2,∂ϕ₂Cω_n1n2 = Cω_∂ϕ₂Cω(n1,n2;kwargs...)
-		Ct_n1n2 = Ct(Cω_n1n2,dν)
-		∂ϕ₂Ct_n1n2 = ∂ϕ₂Ct(∂ϕ₂Cω_n1n2,dν)
-
-		τ_ind_arr = get(kwargs,:τ_ind_arr,
-							time_window_by_fitting_bounce_peak(Ct_n1n2,
-								n1,n2,dt=dt,Nt=Nt,bounce_no=bounce_no))
+		if isnothing(get(kwargs,:Cω,nothing)) && isnothing(get(kwargs,:∂ϕ₂Cω,nothing))
+			Cω_n1n2,∂ϕ₂Cω_n1n2 = Cω_∂ϕ₂Cω(n1,n2;kwargs...)
+		elseif isnothing(get(kwargs,:Cω,nothing))
+			Cω_n1n2 = Cω(n1,n2;kwargs...)
+		elseif isnothing(get(kwargs,:∂ϕ₂Cω,nothing))
+			∂ϕ₂Cω_n1n2 = ∂ϕ₂Cω(n1,n2;kwargs...)
+		end
 		
-		h_t = get(kwargs,:ht,nothing)
+		if isnothing(τ_ind_arr)
+			Ct_n1n2 = Ct(Cω_n1n2,dν)
+			τ_ind_arr = time_window_indices_by_fitting_bounce_peak(Ct_n1n2,
+								n1,n2,dt=dt,Nt=Nt,bounce_no=bounce_no)
+		end
 
-		if isnothing(h_t) 
-			h_ω = get(kwargs,:hω,nothing)
-			if isnothing(h_ω)
+		if isnothing(get(kwargs,:ht,nothing))
+			if isnothing(get(kwargs,:hω,nothing))
 				h_t = ht(Cω_n1n2,n1,n2;τ_ind_arr=τ_ind_arr,kwargs...)
 			else
 				h_t = @fft_ω_to_t(h_ω)	
 			end
 		end
 
-		h_t = h_t[τ_ind_arr]
-
+		∂ϕ₂Ct_n1n2 = ∂ϕ₂Ct(∂ϕ₂Cω_n1n2,dν)
 		δC_t = δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_n1n2;
-											Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,kwargs...)
-		δτ = sum(h_t.*δC_t)*dt
+											Ω_rot=Ω_rot,kwargs...)
+		
+		δτ = sum(h_t[τ_ind_arr].*δC_t[τ_ind_arr])*dt
+	end
+
+	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2_arr::Vector{<:Point2D};
+		Ω_rot=20e2/Rsun,bounce_no=1,τ_ind_arr=nothing,kwargs...)
+
+		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν Nt
+
+		Cω_n1n2 = get(kwargs,:Cω,nothing)
+		∂ϕ₂Cω_n1n2 = get(kwargs,:∂ϕ₂Cω,nothing)
+
+		if isnothing(Cω_n1n2) && isnothing(∂ϕ₂Cω_n1n2)
+			Cω_n1n2,∂ϕ₂Cω_n1n2 = Cω_∂ϕ₂Cω(n1,n2_arr;kwargs...)
+		elseif isnothing(Cω_n1n2)
+			Cω_n1n2 = Cω(n1,n2_arr;kwargs...)
+		elseif isnothing(∂ϕ₂Cω_n1n2)
+			∂ϕ₂Cω_n1n2 = ∂ϕ₂Cω(n1,n2_arr;kwargs...)
+		end
+		
+		if isnothing(τ_ind_arr)
+			Ct_n1n2 = Ct(Cω_n1n2,dν)
+			τ_ind_arr = time_window_indices_by_fitting_bounce_peak(Ct_n1n2,
+								n1,n2_arr,dt=dt,Nt=Nt,bounce_no=bounce_no)
+		end
+
+		h_t = get(kwargs,:ht,nothing)
+		if isnothing(h_t)
+			h_ω = get(kwargs,:hω,nothing)
+			if isnothing(h_ω)
+				h_t = ht(Cω_n1n2,n1,n2_arr;τ_ind_arr=τ_ind_arr,kwargs...) 
+			else
+				h_t = @fft_ω_to_t(h_ω)	
+			end
+		end
+
+		∂ϕ₂Ct_n1n2 = ∂ϕ₂Ct(∂ϕ₂Cω_n1n2,dν)
+		δC_t = δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_n1n2;
+											Ω_rot=Ω_rot,kwargs...)
+		
+		δτ = [sum(h_t[τ_ind_arr[n2ind],n2ind].*δC_t[τ_ind_arr[n2ind],n2ind])*dt 
+				for n2ind in 1:length(n2_arr)]
 	end
 
 	function traveltimes_validate(n1,n2;kwargs...)

@@ -287,8 +287,7 @@ module Greenfn_radial
 	@reexport using Main.finite_difference
 	@reexport using OffsetArrays, FITSIO,JLD2,
 	FileIO,ParallelUtilities,Polynomials,
-	Distributed,Printf
-	using ProgressMeter
+	Distributed,Printf,ProgressMeter
 
 	function load_solar_model()
 		

@@ -1,19 +1,18 @@
 using PyPlot,PointsOnASphere,LaTeXStrings,LinearAlgebra,FITSIO,JLD2,FFTW
 using PyCall,DelimitedFiles,OffsetArrays,DataFrames,CSV,Printf,ProgressMeter
 @pyimport matplotlib.ticker as ticker
-import Main.crosscov: @fft_ω_to_t,@fft_t_to_ω
 
 SCRATCH = ENV["SCRATCH"]
 
 const Rsun = Main.crosscov.Rsun
 
-function plot_traveltimes_validation(;nϕ=5,bounce_no=1,kwargs...)
+function plot_traveltimes_validation(ϕ_low=40,ϕ_high=75;nϕ=5,bounce_no=1,kwargs...)
 	
 	r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
 	Gfn_path_src = Main.crosscov.Gfn_path_from_source_radius(r_src)
 	@load joinpath(Gfn_path_src,"parameters.jld2") Nt dt dν Nν
 
-	ϕ2_deg = collect(LinRange(41,59,nϕ))
+	ϕ2_deg = collect(LinRange(ϕ_low,ϕ_high,nϕ))
 	ϕ2_arr = ϕ2_deg*π/180
 	n1 = Point2D(π/2,0)
 	n2_arr = [Point2D(π/2,ϕ2) for ϕ2 in ϕ2_arr]
@@ -24,20 +23,26 @@ function plot_traveltimes_validation(;nϕ=5,bounce_no=1,kwargs...)
 	t_inds = Vector{UnitRange}(undef,length(n2_arr))
 
 	Cω_arr = zeros(ComplexF64,Nν,length(n2_arr))
+	∂ϕ₂Cω_arr = zeros(ComplexF64,Nν,length(n2_arr))
 	hω_arr = zeros(ComplexF64,Nν,length(n2_arr))
-	@showprogress 0.5 "δτ rotated frame " for (ind,n2) in enumerate(n2_arr)
+	@showprogress 1 "Computing time window " for (ind,n2) in enumerate(n2_arr)
 		Cω,∂ϕ₂Cω = Main.crosscov.Cω_∂ϕ₂Cω(n1,n2;kwargs...)
 		Cω_arr[:,ind] = Cω
+		∂ϕ₂Cω_arr[:,ind] = ∂ϕ₂Cω
 		Ct = Main.crosscov.Ct(Cω,dν)
 		∂ϕ₂Ct = Main.crosscov.∂ϕ₂Ct(∂ϕ₂Cω,dν)
-		t_inds[ind] = Main.crosscov.time_window_by_fitting_bounce_peak(Ct,n1,n2,
+		t_inds[ind] = Main.crosscov.time_window_indices_by_fitting_bounce_peak(Ct,n1,n2,
 								dt=dt,Nt=Nt,bounce_no=bounce_no)
 		hω_arr[:,ind] = Main.crosscov.hω(Cω,n1,n2;τ_ind_arr=t_inds[ind],kwargs...)
-		δτ_rot2[ind] = Main.kernel.δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(
-								n1,n2;τ_ind_arr=t_inds[ind],hω=hω_arr[:,ind],kwargs...)
 	end
+
+	println("Computing rotated-frame travel times")
+	δτ_rot2 .= Main.kernel.δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(
+								n1,n2_arr;τ_ind_arr=t_inds,hω=hω_arr,
+								Cω=Cω_arr,∂ϕ₂Cω=∂ϕ₂Cω_arr,kwargs...)
 	println("Finished computing rotated-frame travel times")
 
+	println("Computing first Born travel times")
 	@time δτ_FB .= Main.kernel.δτ_uniform_rotation_firstborn_int_K_u(n1,n2_arr;
 									hω_arr=hω_arr,kwargs...)
 	println("Finished computing first Born travel times")
@@ -47,19 +52,22 @@ function plot_traveltimes_validation(;nϕ=5,bounce_no=1,kwargs...)
 	ϕ2_arr .*= 180/π # convert to degrees
 
 	ax1 = subplot2grid((3,1),(0,0),rowspan=2)
-	plot(ϕ2_arr,δτ_rot2,"p-",label="Rotated frame",lw=0.6)
-	plot(ϕ2_arr,δτ_FB,"o--",label="First Born")
+	plot(ϕ2_arr,δτ_rot2,"p-",label="Rotated frame",lw=0.6,ms=2)
+	plot(ϕ2_arr,δτ_FB,"o",label="First Born",ms=2,ls="None")
 	ylabel("δτ [sec]",fontsize=12)
 	legend(loc="best")
+	ax1[:xaxis][:set_major_formatter](ticker.NullFormatter())
 
 	ax2 = subplot2grid((3,1),(2,0))
 	plot(ϕ2_arr,percentage_diff,"o-",ms=4,zorder=2)
 	ylabel("Difference",fontsize=12)
 	xlabel("Angular separation [degrees]",fontsize=12)
-	ax2[:set_yticklabels]([(@sprintf "%.2f" x)*"%" for x in ax2[:get_yticks]()])
 	ax2[:axhline](0,ls="dotted",color="black",zorder=0)
+	ax2[:margins](y=0.2)
+	ax2[:set_yticklabels]([(@sprintf "%.2f" x)*"%" for x in ax2[:get_yticks]()])
 
 	tight_layout()
+	gcf()[:subplots_adjust](hspace=0)
 
 	dτ_arr = DataFrame(dist=ϕ2_deg,t_inds=t_inds,dt_FB=δτ_FB,dt_rot=δτ_rot2,
 		percentage_diff=percentage_diff)
@@ -292,10 +300,10 @@ function plot_h(x1,x2;kwargs...)
 	@load joinpath(Gfn_path_src,"parameters.jld2") ν_start_zeros ν_arr Nt dt dν Nν_Gfn
 
 	Cω_x1x2 = Main.crosscov.Cω(x1,x2;kwargs...)
-	C_t = @fft_ω_to_t(Cω_x1x2)
-	τ_ind_arr = Main.crosscov.time_window_by_fitting_bounce_peak(C_t,x1,x2;dt=dt,kwargs...)
+	C_t = Main.crosscov.@fft_ω_to_t(Cω_x1x2)
+	τ_ind_arr = Main.crosscov.time_window_indices_by_fitting_bounce_peak(C_t,x1,x2;dt=dt,kwargs...)
 	ht = Main.crosscov.ht(Cω_x1x2,x1,x2;τ_ind_arr=τ_ind_arr,kwargs...)
-	hω = @fft_t_to_ω(ht)
+	hω = Main.crosscov.@fft_t_to_ω(ht)
 
 	subplot(411)
 	plot(ν_arr,real(Cω_x1x2[ν_start_zeros .+ (1:Nν_Gfn)]))

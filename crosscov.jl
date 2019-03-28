@@ -20,7 +20,7 @@ module crosscov
 	export δCω_uniform_rotation_firstborn_integrated_over_angle
 	export δCω_uniform_rotation_rotatedwaves_linearapprox
 	export δCω_uniform_rotation_rotatedwaves,δCt_uniform_rotation_rotatedwaves,δCt_uniform_rotation_rotatedwaves_linearapprox
-	export intersect_fallback,time_window_by_fitting_bounce_peak,time_window_bounce_filter
+	export intersect_fallback,time_window_indices_by_fitting_bounce_peak,time_window_bounce_filter
 	export @fft_ω_to_t,@fft_t_to_ω
 
 	Gfn_path_from_source_radius(x::Point3D) = Gfn_path_from_source_radius(x.r)
@@ -649,12 +649,16 @@ module crosscov
 		ℓ_range=nothing,ν_ind_range=nothing,r_src=Rsun-75e5,r_obs=Rsun-75e5,kwargs...)
 
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν dω
 
 		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
 		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
 
-		∂ϕ₂Pl_cosχ = [dPl(cosχ(n1,n2),ℓmax=ℓ_range[end]) .* ∂ϕ₂cosχ(n1,n2) for n2 in n2_arr]
+		∂ϕ₂Pl_cosχ = zeros(0:ℓ_range[end],length(n2_arr))
+		for (n2ind,n2) in enumerate(n2_arr)
+			∂ϕ₂Pl_cosχ[:,n2ind] .= dPl(cosχ(n1,n2),ℓmax=ℓ_range[end]) .* ∂ϕ₂cosχ(n1,n2)
+		end
+		∂ϕ₂Pl_cosχ = copy(transpose(∂ϕ₂Pl_cosχ))
 
 		function summodes(rank,rank_node,np_node,channel_on_node)
 
@@ -666,6 +670,8 @@ module crosscov
 
 			r_obs_ind = argmin(abs.(r .- r_obs))
 
+			f = 0.0
+
 			for (proc_id,Gsrc_file) in Gfn_fits_files_src
 
 				# Get a list of (ℓ,ω) in this file
@@ -676,14 +682,15 @@ module crosscov
 					ℓω_index_in_file = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
 					ω_ind_full = ν_start_zeros + ω_ind
-		    		ω = 2π * dν*ω_ind_full
+		    		ω = dω*ω_ind_full
 		    		
 		    		G = read(Gsrc_file[1],r_obs_ind,:,1,1,1,ℓω_index_in_file)
 		    		αℓω2 = G[1]^2 + G[2]^2
 
-		    		for (n2ind,n2) in enumerate(n2_arr)
-		    			Cω_proc[n2ind,ω_ind_full] += ω^2 * Powspec(ω) * (2ℓ+1)/4π * αℓω2 * ∂ϕ₂Pl_cosχ[n2ind][ℓ]
-		    		end
+		    		f = ω^2 * Powspec(ω) * (2ℓ+1)/4π * αℓω2
+
+		    		@. Cω_proc[:,ω_ind_full] +=  f * ∂ϕ₂Pl_cosχ[:,ℓ]
+		    		
 				end
 			end
 
@@ -864,6 +871,93 @@ module crosscov
 
 		return Cω_arr[:,1],Cω_arr[:,2]
 	end
+
+	function Cω_∂ϕ₂Cω(n1::Point2D,n2_arr::Vector{<:Point2D};ℓ_range=nothing,ν_ind_range=nothing,
+		r_src=Rsun-75e5,r_obs=Rsun-75e5,kwargs...)
+		
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
+
+		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+
+		∂ϕ₂Pl_cosχ = zeros(0:ℓ_range[end],length(n2_arr))
+		Pl_cosχ = zeros(0:ℓ_range[end],length(n2_arr))
+		for (n2ind,n2) in enumerate(n2_arr)
+			Pl_dPl_cosχ = Pl_dPl(cosχ(n1,n2),ℓmax=ℓ_range[end])
+			Pl_cosχ[:,n2ind] = Pl_dPl_cosχ[:,0]
+			∂ϕ₂Pl_cosχ[:,n2ind] = Pl_dPl_cosχ[:,1].* ∂ϕ₂cosχ(n1,n2)
+		end
+
+		Pl_cosχ = copy(transpose(Pl_cosχ))
+		∂ϕ₂Pl_cosχ = copy(transpose(∂ϕ₂Pl_cosχ))
+
+		function summodes(rank,rank_node,np_node,channel_on_node)
+
+			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
+
+			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
+			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
+
+			Cω_proc = zeros(ComplexF64,0:1,length(n2_arr),ν_ind_range .+ ν_start_zeros)
+
+			r_obs_ind = argmin(abs.(r .- r_obs))
+
+			f = 0.0
+
+			for (proc_id,Gsrc_file) in Gfn_fits_files_src
+
+				# Get a list of (ℓ,ω) in this file
+				modes_in_file = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,proc_id)
+
+		    	for (ℓ,ω_ind) in intersect(ℓ_ωind_iter_on_proc,modes_in_file)
+					
+					mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
+
+					ω_ind_full = ν_start_zeros + ω_ind 
+		    		ω = 2π * dν*ω_ind_full
+		    		
+		    		G = read(Gsrc_file[1],r_obs_ind,:,1,1,1,mode_index)
+		    		abs_α_robs² = G[1]^2 + G[2]^2
+
+		    		f = ω^2 * Powspec(ω) * (2ℓ+1)/4π * abs_α_robs²
+
+		    		for n2ind in 1:length(n2_arr)
+			    		Cω_proc[0,n2ind,ω_ind_full] += f * Pl_cosχ[n2ind,ℓ]
+			    		Cω_proc[1,n2ind,ω_ind_full] += f * ∂ϕ₂Pl_cosχ[n2ind,ℓ]
+			    	end
+				end
+			end
+
+			close.(values(Gfn_fits_files_src))
+
+			if rank_node == 0
+				for n in 1:np_node-1
+					Cω_proc .+= take!(channel_on_node)
+				end
+				put!(channel_on_node,Cω_proc)
+			else
+				put!(channel_on_node,Cω_proc)
+			end
+			return nothing
+		end
+
+		procs_used = workers_active(ℓ_range,ν_ind_range)
+		num_workers = length(procs_used)
+		num_tasks = length(ℓ_range)*length(ν_ind_range)
+
+		Cω_arr = zeros(ComplexF64,0:1,length(n2_arr),Nν)
+
+		T = OffsetArray{ComplexF64,3,Array{ComplexF64,3}}
+		Cω_in_range = pmapsum(T,summodes,procs_used)
+
+		Cω_arr[axes(Cω_in_range)...] .= Cω_in_range
+
+		C = copy(transpose(Cω_arr[0,:,:])).parent
+		∂ϕ₂C = copy(transpose(Cω_arr[1,:,:])).parent
+
+		return C,∂ϕ₂C
+	end
 	########################################################################################################
 	# Time-domain cross-covariance
 	########################################################################################################
@@ -878,6 +972,7 @@ module crosscov
 	end
 
 	Ct(Cω_arr::Array{ComplexF64},dν) = @fft_ω_to_t(Cω_arr)
+	Ct(Cω_arr::OffsetArray{ComplexF64},dν) = @fft_ω_to_t(Cω_arr.parent)
 
 	Ct(n1,n2_arr::Vector;kwargs...) = Ct(n1,n2;kwargs...)
 
@@ -900,7 +995,7 @@ module crosscov
 		@fft_ω_to_t(C)
 	end
 
-	∂ϕ₂Ct(∂ϕ₂Cω_arr::Array{ComplexF64},dν) = @fft_ω_to_t(∂ϕ₂Cω_arr)
+	∂ϕ₂Ct(∂ϕ₂Cω_arr::AbstractArray{ComplexF64},dν) = @fft_ω_to_t(∂ϕ₂Cω_arr)
 
 	########################################################################################################
 	# Cross-covariance at all distances on the equator, essentially the time-distance diagram
@@ -1336,63 +1431,23 @@ module crosscov
 		return δCt_arr
 	end
 
-	function δCt_uniform_rotation_rotatedwaves_linearapprox(n1::Point2D,n2_arr::Vector{<:Point2D};Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,r_obs=Rsun-75e5,kwargs...)
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
-		Gfn_path = Gfn_path_from_source_radius(r_src)
-		@load "$Gfn_path/parameters.jld2" Nt dt
+	function δCt_uniform_rotation_rotatedwaves_linearapprox(n1::Point2D,n2_arr::Vector{<:Point2D};
+		Ω_rot = 20e2/Rsun,kwargs...)
 		
-		t = (0:Nt-1).*dt
+		C = ∂ϕ₂Ct(n1,n2_arr;kwargs...)
 		
-		δCt = -Ω_rot .* t .* ∂ϕ₂Ct(n1,n2_arr;kwargs...)
-		δCt_arr = Vector{Float64}[]
-		if !isnothing(τ_ind_arr)
-			for (n2ind,τ_inds) in enumerate(τ_ind_arr)
-				push!(δCt_arr,δCt[τ_inds,n2ind])
-			end
-		else
-			δCt_arr = δCt
-		end
-		return δCt_arr
+		δCt_uniform_rotation_rotatedwaves_linearapprox(C;Ω_rot=Ω_rot,kwargs...)
+
 	end
 
-	function δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_arr::Array{Float64,2};
-		Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,r_obs=Rsun-75e5,kwargs...)
+	function δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_arr::Array{Float64};
+		Ω_rot = 20e2/Rsun,kwargs...)
 
 		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
 		Gfn_path = Gfn_path_from_source_radius(r_src)
 		@load "$Gfn_path/parameters.jld2" Nt dt
-		
-		t = (0:Nt-1).*dt
-		
-		δCt = -Ω_rot .* t .* ∂ϕ₂Ct_arr
-		δCt_arr = Vector{Vector{Float64}}(undef,size(∂ϕ₂Ct_arr,2))
-		if !isnothing(τ_ind_arr)
-			for (n2ind,τ_inds) in enumerate(τ_ind_arr)
-				δCt_arr[n2ind] .= δCt[τ_inds,n2ind]
-			end
-		else
-			δCt_arr = δCt
-		end
-		return δCt_arr
-	end
 
-	function δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_arr::Array{Float64,1};
-		Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,r_obs=Rsun-75e5,kwargs...)
-
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
-		Gfn_path = Gfn_path_from_source_radius(r_src)
-		@load "$Gfn_path/parameters.jld2" Nt dt
-		
-		t = (0:Nt-1).*dt
-		
-		δCt = -Ω_rot .* t .* ∂ϕ₂Ct_arr
-		
-		if !isnothing(τ_ind_arr)
-			δCt_arr = δCt[τ_ind_arr]
-		else
-			δCt_arr = δCt
-		end
-		return δCt_arr
+		@. -Ω_rot * (0:Nt-1)*dt * ∂ϕ₂Ct_arr
 	end
 
 	########################################################################################################################
@@ -1443,14 +1498,14 @@ module crosscov
 		return τ_low_ind,τ_high_ind
 	end
 
-	function time_window_by_fitting_bounce_peak(C_t::Array{Float64},x1,x2;
+	function time_window_indices_by_fitting_bounce_peak(C_t::Array{Float64,1},x1,x2;
 		dt,bounce_no=1,kwargs...)
 
 		τ_low_ind,τ_high_ind = time_window_bounce_filter(x1,x2,dt,bounce_no)
-		time_window_by_fitting_bounce_peak(C_t,τ_low_ind,τ_high_ind;dt=dt,kwargs...)
+		time_window_indices_by_fitting_bounce_peak(C_t,τ_low_ind,τ_high_ind;dt=dt,kwargs...)
 	end
 
-	function time_window_by_fitting_bounce_peak(C_t::Array{Float64},τ_low_ind::Int64,τ_high_ind::Int64;
+	function time_window_indices_by_fitting_bounce_peak(C_t::Array{Float64,1},τ_low_ind::Int64,τ_high_ind::Int64;
 		dt,Nt=size(C_t,1),kwargs...)
 		
 		env = abs.(hilbert(C_t[1:div(Nt,2)]))
@@ -1461,6 +1516,29 @@ module crosscov
 
 		t_inds_range = floor(Int64,t0 - 2σt):ceil(Int64,t0 + 2σt)
 	end
+
+	function time_window_indices_by_fitting_bounce_peak(C_t::Array{Float64,2},x1,x2_arr::Vector;kwargs...)
+		t_inds_range = Vector{UnitRange}(undef,size(C_t,2))
+		for (x2ind,x2) in enumerate(x2_arr)
+			t_inds_range[x2ind] = time_window_indices_by_fitting_bounce_peak(C_t[:,x2ind],
+									x1,x2;kwargs...)
+		end
+		return t_inds_range
+	end
+
+	function time_window(a::Vector,τ_ind_arr)
+		b = zeros(size(a))
+		b[τ_ind_arr] .= 1.0
+		return b
+	end
+
+	function time_window(a::Array{T,2},τ_ind_arr::Vector) where {T}
+		b = zeros(size(a))
+		for idx in axes(a,2)
+			b[τ_ind_arr[idx],idx] .= 1.0
+		end
+		return b
+	end	
 
 	function ht(Cω_x1x2::Array{ComplexF64},args...;bounce_no=1,kwargs...)
 
@@ -1475,15 +1553,15 @@ module crosscov
 
 		τ_ind_arr = get(kwargs,:τ_ind_arr,nothing)
 		if isnothing(τ_ind_arr)
-			τ_ind_arr = time_window_by_fitting_bounce_peak(C_t,args...;
+			τ_ind_arr = time_window_indices_by_fitting_bounce_peak(C_t,args...;
 						dt=dt,Nt=Nt,bounce_no=bounce_no)
 		end
 
-		f_t = zeros(Nt)
-		f_t[τ_ind_arr] .= 1
+		f_t = time_window(∂tCt,τ_ind_arr)
 
 		h_t =  (@. f_t * ∂tCt) ./ sum((@. f_t*∂tCt^2 * dt),dims=1)
 	end
+	
 
 	function ht(x1,x2;bounce_no=1,kwargs...)
 
