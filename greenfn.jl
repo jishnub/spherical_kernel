@@ -289,6 +289,9 @@ module Greenfn_radial
 	FileIO,ParallelUtilities,Polynomials,
 	Distributed,Printf,ProgressMeter
 
+	export Rsun,nr,r,dr,ddr,c,ρ,g,N2,γ_damping,r_src_default
+	export components_radial_source,all_components,Gfn_path_from_source_radius,Ω
+
 	function load_solar_model()
 		
 		modelS_meta = readdlm("ModelS.meta",comments=true, comment_char='#');
@@ -325,9 +328,8 @@ module Greenfn_radial
 
 	const Rsun,nr,r,dr,ddr,c,ρ,g,N2,γ_damping = load_solar_model()
 	const r_src_default = Rsun - 75e5
-	export Rsun,nr,r,dr,ddr,c,ρ,g,N2,γ_damping,r_src_default
 
-	function source(ω,ℓ;r_src=Rsun-75e5)
+	function source(ω,ℓ;r_src=r_src_default)
 
 		r_src_ind = argmin(abs.(r.-r_src))
 		r_src_on_grid = r[r_src_ind];
@@ -392,7 +394,7 @@ module Greenfn_radial
 		return M_ωℓ
 	end
 
-	function compute_radial_component_of_Gfn_onemode(ω,ℓ;r_src=Rsun-75e5,tangential=false)
+	function compute_radial_component_of_Gfn_onemode(ω,ℓ;r_src=r_src_default,tangential=false)
 
 		# Solar model
 
@@ -431,7 +433,7 @@ module Greenfn_radial
 										(@sprintf "%dkm" (Rsun-r_src)/1e5) : (@sprintf "%.2fRsun" r_src/Rsun) ))"
 	end
 
-	function frequency_grid(r_src;ν_low=2.0e-3,ν_high=4.5e-3,num_ν=1250,ν_Nyquist=16e-3)
+	function frequency_grid(r_src=r_src_default;ν_low=2.0e-3,ν_high=4.5e-3,num_ν=1250,ν_Nyquist=16e-3)
 		
 		dν = (ν_high - ν_low)/(num_ν-1); dω = 2π*dν
 		
@@ -447,17 +449,38 @@ module Greenfn_radial
 		T=1/dν; dt = T/Nt;
 		ν_start_zeros = ν_low_index # index starts from zero
 		ν_end_zeros = ν_Nyquist_index - ν_high_index
-		
+
 		ω_arr = 2π .* ν_arr;
 
 		Gfn_save_directory = Gfn_path_from_source_radius(r_src)
 		if !isdir(Gfn_save_directory)
 			mkdir(Gfn_save_directory)
 		end
-		@save joinpath(Gfn_save_directory,"parameters.jld2") ν_arr ν_full dν dω ν_start_zeros ν_end_zeros Nν Nt dt T Nν_Gfn
+		@save(joinpath(Gfn_save_directory,"parameters.jld2"),
+			ν_arr,ν_full,dν,dω,ν_start_zeros,ν_end_zeros,Nν,Nt,dt,T,Nν_Gfn,ν_Nyquist)
 	end
 
-	function compute_Greenfn_components_allmodes_parallel(r_src=r_src_default;ℓ_arr=1:100,kwargs...)
+	function append_parameters(r_src=r_src_default;kwargs...)
+		Gfn_save_directory = Gfn_path_from_source_radius(r_src)
+		paramfile = joinpath(Gfn_save_directory,"parameters.jld2")
+		params = jldopen(paramfile,"a+")
+		for (k,v) in Dict(kwargs)
+			params[string(k)] = v
+		end
+		close(params)
+	end
+
+	function update_parameters(r_src=r_src_default;kwargs...)
+		Gfn_save_directory = Gfn_path_from_source_radius(r_src)
+		paramfile = joinpath(Gfn_save_directory,"parameters.jld2")
+		params = load(paramfile)
+		for (k,v) in Dict(kwargs)
+			params[string(k)] = v
+		end
+		save(paramfile,params)
+	end
+
+	function all_components(r_src=r_src_default;ℓ_arr=1:100,kwargs...)
 
 		Gfn_save_directory = Gfn_path_from_source_radius(r_src)
 
@@ -468,13 +491,7 @@ module Greenfn_radial
 		println("Saving output to $Gfn_save_directory")
 
 		frequency_grid(r_src;kwargs...);
-		paramfile = jldopen(joinpath(Gfn_save_directory,"parameters.jld2"), "a+")
-
-		Nν_Gfn = paramfile["Nν_Gfn"]
-		dω = paramfile["dω"]
-		Nν_Gfn = paramfile["Nν_Gfn"]
-		ν_arr = paramfile["ν_arr"]
-		ν_start_zeros = paramfile["ν_start_zeros"]
+		@load joinpath(Gfn_save_directory,"parameters.jld2") Nν_Gfn dω Nν_Gfn ν_arr ν_start_zeros
 
 		println("$Nν_Gfn frequencies over $(@sprintf "%.1e" ν_arr[1]) to $(@sprintf "%.1e" ν_arr[end])")
 		println("ℓ from $(ℓ_arr[1]) to $(ℓ_arr[end])")
@@ -522,10 +539,7 @@ module Greenfn_radial
 		num_procs = length(w)
 		println("Number of workers: $num_procs")
 
-		paramfile["num_procs"] = num_procs
-		paramfile["ℓ_arr"] = ℓ_arr
-
-		close(paramfile)
+		append_parameters(num_procs=num_procs,ℓ_arr=ℓ_arr)
 
 		if isempty(w)
 			return
@@ -547,7 +561,7 @@ module Greenfn_radial
 		return nothing
 	end
 
-	function compute_Greenfn_radial_components_allmodes_parallel(r_src=r_src_default;ℓ_arr=1:100,kwargs...)
+	function components_radial_source(r_src=r_src_default;ℓ_arr=1:100,kwargs...)
 
 		Gfn_save_directory = Gfn_path_from_source_radius(r_src)
 
@@ -558,13 +572,7 @@ module Greenfn_radial
 		println("Saving output to $Gfn_save_directory")
 
 		frequency_grid(r_src;kwargs...);
-		paramfile = jldopen(joinpath(Gfn_save_directory,"parameters.jld2"), "a+")
-
-		Nν_Gfn = paramfile["Nν_Gfn"]
-		dω = paramfile["dω"]
-		Nν_Gfn = paramfile["Nν_Gfn"]
-		ν_arr = paramfile["ν_arr"]
-		ν_start_zeros = paramfile["ν_start_zeros"]
+		@load joinpath(Gfn_save_directory,"parameters.jld2") Nν_Gfn dω Nν_Gfn ν_arr ν_start_zeros
 
 		println("$Nν_Gfn frequencies over $(@sprintf "%.1e" ν_arr[1]) to $(@sprintf "%.1e" ν_arr[end])")
 		println("ℓ from $(ℓ_arr[1]) to $(ℓ_arr[end])")
@@ -615,10 +623,7 @@ module Greenfn_radial
 		println("Number of workers: $num_procs")
 		num_tasks = length(ℓ_arr)*Nν_Gfn
 
-		paramfile["num_procs"] = num_procs
-		paramfile["ℓ_arr"] = ℓ_arr
-
-		close(paramfile)
+		append_parameters(num_procs=num_procs,ℓ_arr=ℓ_arr)
 
 		if isempty(w)
 			return
@@ -640,7 +645,6 @@ module Greenfn_radial
 		return nothing
 	end
 
-	export compute_Greenfn_radial_components_allmodes_parallel,Gfn,Gfn_path_from_source_radius,Ω
 end
 
 ################################################################

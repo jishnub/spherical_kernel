@@ -13,7 +13,7 @@ function plot_traveltimes_validation(ϕ_low=40,ϕ_high=75;nϕ=5,bounce_no=1,kwar
 	@load joinpath(Gfn_path_src,"parameters.jld2") Nt dt dν Nν
 
 	ϕ2_deg = collect(LinRange(ϕ_low,ϕ_high,nϕ))
-	ϕ2_arr = ϕ2_deg*π/180
+	ϕ2_arr = ϕ2_deg.*π/180
 	n1 = Point2D(π/2,0)
 	n2_arr = [Point2D(π/2,ϕ2) for ϕ2 in ϕ2_arr]
 
@@ -37,13 +37,13 @@ function plot_traveltimes_validation(ϕ_low=40,ϕ_high=75;nϕ=5,bounce_no=1,kwar
 	end
 
 	println("Computing rotated-frame travel times")
-	δτ_rot2 .= Main.kernel.δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(
+	δτ_rot2 .= Main.traveltimes.δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(
 								n1,n2_arr;τ_ind_arr=t_inds,hω=hω_arr,
 								Cω=Cω_arr,∂ϕ₂Cω=∂ϕ₂Cω_arr,kwargs...)
 	println("Finished computing rotated-frame travel times")
 
 	println("Computing first Born travel times")
-	@time δτ_FB .= Main.kernel.δτ_uniform_rotation_firstborn_int_K_u(n1,n2_arr;
+	@time δτ_FB .= Main.traveltimes.δτ_uniform_rotation_firstborn_int_K_u(n1,n2_arr;
 									hω_arr=hω_arr,kwargs...)
 	println("Finished computing first Born travel times")
 
@@ -52,11 +52,12 @@ function plot_traveltimes_validation(ϕ_low=40,ϕ_high=75;nϕ=5,bounce_no=1,kwar
 	ϕ2_arr .*= 180/π # convert to degrees
 
 	ax1 = subplot2grid((3,1),(0,0),rowspan=2)
-	plot(ϕ2_arr,δτ_rot2,"p-",label="Rotated frame",lw=0.6,ms=2)
-	plot(ϕ2_arr,δτ_FB,"o",label="First Born",ms=2,ls="None")
+	plot(ϕ2_arr,δτ_rot2,"p-",label="Rotated frame",ms=3)
+	plot(ϕ2_arr,δτ_FB,"o",label="First Born",ms=3,ls="dashed")
 	ylabel("δτ [sec]",fontsize=12)
 	legend(loc="best")
 	ax1[:xaxis][:set_major_formatter](ticker.NullFormatter())
+	ax1[:xaxis][:set_major_locator](ticker.MaxNLocator(5))
 
 	ax2 = subplot2grid((3,1),(2,0))
 	plot(ϕ2_arr,percentage_diff,"o-",ms=4,zorder=2)
@@ -65,6 +66,7 @@ function plot_traveltimes_validation(ϕ_low=40,ϕ_high=75;nϕ=5,bounce_no=1,kwar
 	ax2[:axhline](0,ls="dotted",color="black",zorder=0)
 	ax2[:margins](y=0.2)
 	ax2[:set_yticklabels]([(@sprintf "%.2f" x)*"%" for x in ax2[:get_yticks]()])
+	ax2[:xaxis][:set_major_locator](ticker.MaxNLocator(5))
 
 	tight_layout()
 	gcf()[:subplots_adjust](hspace=0)
@@ -72,8 +74,8 @@ function plot_traveltimes_validation(ϕ_low=40,ϕ_high=75;nϕ=5,bounce_no=1,kwar
 	dτ_arr = DataFrame(dist=ϕ2_deg,t_inds=t_inds,dt_FB=δτ_FB,dt_rot=δτ_rot2,
 		percentage_diff=percentage_diff)
 
-	# savefig("traveltimes_validation.png")
-	# CSV.write("travel_time_shifts_uniform_rotation",dτ_arr,delim=' ')
+	savefig("$SCRATCH/traveltimes_validation.png")
+	CSV.write("$SCRATCH/travel_time_shifts_uniform_rotation",dτ_arr,delim=' ')
 
 	dτ_arr
 end
@@ -172,9 +174,15 @@ function plot_Ks0()
 	tight_layout()
 end
 
-function plot_time_distance(;t_max=6,t_min=0.3,ℓ_range = 20:100,nϕ=maximum(ℓ_range),r_obs=Rsun-75e5) # time in hours
+function plot_time_distance(;kwargs...) # time in hours
 
-	Gfn_path_src = Main.Greenfn_radial.Gfn_path_from_source_radius(r_obs)
+	r_src = get(kwargs,:r_src,Main.crosscov.r_src_default) :: Float64
+	t_max = get(kwargs,:t_max,6)
+	t_min = get(kwargs,:t_min,0.3)
+	ℓ_range = get(kwargs,:ℓ_range,20:100)
+	nϕ = get(kwargs,:nϕ,maximum(ℓ_range))
+
+	Gfn_path_src = Main.Greenfn_radial.Gfn_path_from_source_radius(r_src)
 	@load joinpath(Gfn_path_src,"parameters.jld2") dt Nt
 
 	t_max_ind = Int(floor(t_max*60^2/dt))+1
@@ -203,6 +211,53 @@ function plot_time_distance(;t_max=6,t_min=0.3,ℓ_range = 20:100,nϕ=maximum(�
 	ax2[:set_ylim](ax1[:get_ylim]())
 
 	tight_layout()
+end
+
+function plot_time_distance_bounce_filtered(;bounce_no=1,kwargs...)
+	r_src = get(kwargs,:r_src,Main.crosscov.r_src_default) :: Float64
+	t_max = get(kwargs,:t_max,6)
+	t_min = get(kwargs,:t_min,0.3)
+	ℓ_range = get(kwargs,:ℓ_range,20:100)
+	nϕ = get(kwargs,:nϕ,maximum(ℓ_range))
+	
+	Gfn_path_src = Main.Greenfn_radial.Gfn_path_from_source_radius(r_src)
+	@load joinpath(Gfn_path_src,"parameters.jld2") dt Nt
+
+	t_max_ind = Int(floor(t_max*60^2/dt))+1
+	t_min_ind = Int(floor(t_min*60^2/dt))+1
+	t_inds = t_min_ind:t_max_ind
+
+	t = t_inds.*dt./60^2
+
+	ϕ = LinRange(5,90,nϕ).*π/180
+
+	C = Main.crosscov.CΔϕt(τ_ind_arr=t_inds,ℓ_range=ℓ_range,Δϕ_arr=ϕ)
+	C = copy(transpose(C))
+
+	C_filt = copy(C)
+	f_t = zeros(size(C_filt))
+	for (ind,Δϕ_i) in enumerate(ϕ)
+		τ_low_ind,τ_high_ind = Main.crosscov.time_window_bounce_filter(Δϕ_i,dt,bounce_no)
+		f_t[τ_low_ind:τ_high_ind,ind] .= 1
+	end
+
+	C_filt .*= f_t
+
+	ax1 = subplot(121)
+	ax2 = subplot(122)
+
+	ax1[:pcolormesh](ϕ.*180/π,t,C./maximum(abs,C),
+		cmap="Greys",vmax=1,vmin=-1,rasterized=true)
+	ax1[:set_xlabel]("Angular separation [degrees]",fontsize=12);
+	ax1[:set_ylabel]("Time [hours]",fontsize=12);
+	ax1[:set_title]("Time-distance diagram",fontsize=12);
+
+	ax2[:pcolormesh](ϕ.*180/π,t,C_filt./maximum(abs,C_filt),
+		cmap="Greys",vmax=1,vmin=-1,rasterized=true)
+	ax2[:set_xlabel]("Angular separation [degrees]",fontsize=12);
+	ax2[:set_ylabel]("Time [hours]",fontsize=12);
+	ax2[:set_title]("Filtered bounce",fontsize=12);
+
 end
 
 function plot_C_spectrum(;ℓ_range=nothing,ν_ind_range=nothing)

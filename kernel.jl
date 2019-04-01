@@ -10,13 +10,13 @@ module kernel
 	@reexport using Main.crosscov
 	# @pyimport scipy.integrate as integrate
 	import WignerSymbols: clebschgordan
-	using Libdl, WignerD, FileIO
+	using WignerD, FileIO
+	export kernel_uniform_rotation_uplus,flow_axisymmetric_srange,
+			meridional_flow_ψ_srange
 
 	################################################################################################################
 	# Validation for uniform rotation
 	################################################################################################################
-
-	uniform_rotation_uplus(Ω_rot=20e2/Rsun) = @. √(4π/3)*im*Ω_rot*r
 
 	function kernel_uniform_rotation_uplus(x1::Point3D,x2::Point3D;kwargs...)
 		
@@ -40,7 +40,7 @@ module kernel
 		r₁_ind = argmin(abs.(r .- x1.r))
 		r₂_ind = argmin(abs.(r .- x2.r))
 
-		function summodes(rank,rank_node,np_node,channel_on_node)
+		function summodes(rank)
 		
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
@@ -117,16 +117,8 @@ module kernel
 			end
 
 			@. K *= -4*√(3/4π) * r * ρ
-
-			if rank_node == 0
-				for n in 1:np_node-1
-					K .+= take!(channel_on_node)
-				end
-				put!(channel_on_node,K)
-			else
-				put!(channel_on_node,K)
-			end
-			return nothing
+			
+			return K
 		end
 
 		procs_used = workers_active(ℓ_range,ν_ind_range)
@@ -162,7 +154,7 @@ module kernel
 
 		# h_ω = hω(n1,n2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src,r_obs=r_obs) # only in range
 
-		function summodes(rank,rank_node,np_node,channel_on_node)
+		function summodes(rank)
 		
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
@@ -222,15 +214,7 @@ module kernel
 
 			@. K *= -4*√(3/4π) * r * ρ
 
-			if rank_node == 0
-				for n in 1:np_node-1
-					K .+= take!(channel_on_node)
-				end
-				put!(channel_on_node,K)
-			else
-				put!(channel_on_node,K)
-			end
-			return nothing
+			return K
 		end
 
 		procs_used = workers_active(ℓ_range,ν_ind_range)
@@ -258,7 +242,7 @@ module kernel
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
 
-		function summodes(rank,rank_node,np_node,channel_on_node)
+		function summodes(rank)
 		
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
@@ -325,16 +309,8 @@ module kernel
 
 			@. K *= -4*√(3/4π) * r * ρ
 
-			if rank_node == 0
-				for n in 1:np_node-1
-					K .+= take!(channel_on_node)
-				end
-				put!(channel_on_node,K)
-			else
-				put!(channel_on_node,K)
-			end
 			put!(tracker,0)
-			return nothing
+			return K
 		end
 
 		∂ϕ₂Pl_cosχ_arr = zeros(0:ℓ_arr[end],length(n2_arr))
@@ -375,180 +351,6 @@ module kernel
 		return K₊
 	end
 
-	function δτ_uniform_rotation_firstborn_int_K_u(x1,x2;Ω_rot=20e2/Rsun,kwargs...)
-		K₊ = kernel_uniform_rotation_uplus(x1,x2;kwargs...)
-		u⁺ = uniform_rotation_uplus(Ω_rot)
-
-		δτ = real.(simps((@. K₊*imag(u⁺)),r))
-	end
-
-	function δτ_uniform_rotation_firstborn_int_hω_δCω(n1,n2;Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
-		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") dω ν_start_zeros Nν_Gfn
-
-		h_ω = get(kwargs,:hω,nothing)
-		if isnothing(h_ω)
-			h_ω = hω(n1,n2;bounce_no=bounce_no,kwargs...)
-		end
-		h_ω = h_ω[ν_start_zeros .+ (1:Nν_Gfn)] # only in range
-
-		δCω = δCω_uniform_rotation_firstborn_integrated_over_angle(n1,n2;
-			Ω_rot=Ω_rot,kwargs...)[ν_start_zeros .+ (1:Nν_Gfn)]
-
-		δτ = simps((@. 2real(conj(h_ω)*δCω)),dω/2π)
-	end
-
-	function δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1::Point2D,n2::Point2D;
-		Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
-
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
-		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") dω ν_start_zeros Nν_Gfn
-
-		h_ω = get(kwargs,:hω,nothing)
-		if isnothing(h_ω)
-			h_ω = hω(n1,n2;bounce_no=bounce_no,kwargs...)
-		end
-		h_ω = h_ω[ν_start_zeros .+ (1:Nν_Gfn)] # only in range
-
-		δCω = δCω_uniform_rotation_rotatedwaves_linearapprox(n1,n2;
-			Ω_rot=Ω_rot,kwargs...)[ν_start_zeros .+ (1:Nν_Gfn)]
-
-		δτ = simps((@. 2real(conj(h_ω)*δCω)),dω/2π)
-		# δτ = sum(@. dω/2π * 2real(conj(h_ω)*δCω))
-	end
-
-	function δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1::Point2D,n2::Point2D;
-		Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
-
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
-		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") dt Nt dν
-
-		Cω_n1n2 = Cω(n1,n2;kwargs...)
-		Ct_n1n2 = Ct(Cω_n1n2,dν)
-		τ_ind_arr = time_window_indices_by_fitting_bounce_peak(Ct_n1n2,n1,n2,dt=dt,Nt=Nt,bounce_no=bounce_no)
-
-		h_t = get(kwargs,:ht,nothing)
-		if isnothing(h_t)
-			h_ω = get(kwargs,:hω,nothing)
-			if isnothing(h_ω)
-				h_t = ht(Cω_n1n2,n1,n2;bounce_no=bounce_no,kwargs...)
-			else
-				h_t = @fft_ω_to_t(h_ω)
-			end
-		end
-		h_t = h_t[τ_ind_arr]
-
-		δC_t = δCt_uniform_rotation_rotatedwaves(n1,n2;Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,kwargs...)
-
-		δτ = simps((h_t.*δC_t.parent),dt)
-	end
-
-	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2::Point2D;
-		Ω_rot=20e2/Rsun,bounce_no=1,τ_ind_arr=nothing,kwargs...)
-
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
-		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν Nt
-
-		if isnothing(get(kwargs,:Cω,nothing)) && isnothing(get(kwargs,:∂ϕ₂Cω,nothing))
-			Cω_n1n2,∂ϕ₂Cω_n1n2 = Cω_∂ϕ₂Cω(n1,n2;kwargs...)
-		elseif isnothing(get(kwargs,:Cω,nothing))
-			Cω_n1n2 = Cω(n1,n2;kwargs...)
-		elseif isnothing(get(kwargs,:∂ϕ₂Cω,nothing))
-			∂ϕ₂Cω_n1n2 = ∂ϕ₂Cω(n1,n2;kwargs...)
-		end
-
-		if isnothing(τ_ind_arr)
-			Ct_n1n2 = Ct(Cω_n1n2,dν)
-			τ_ind_arr = time_window_indices_by_fitting_bounce_peak(Ct_n1n2,
-								n1,n2,dt=dt,Nt=Nt,bounce_no=bounce_no)
-		end
-
-		h_ω = get(kwargs,:hω,nothing)
-		h_t = get(kwargs,:ht, !isnothing(h_ω) ? @fft_ω_to_t(h_ω) :
-			ht(Cω_n1n2,n1,n2;τ_ind_arr=τ_ind_arr,kwargs...))
-
-		∂ϕ₂Ct_n1n2 = ∂ϕ₂Ct(∂ϕ₂Cω_n1n2,dν)
-		δC_t = δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_n1n2;
-											Ω_rot=Ω_rot,kwargs...)
-		
-		δτ = simps((h_t[τ_ind_arr].*δC_t[τ_ind_arr]),dt)
-	end
-
-	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2_arr::Vector{<:Point2D};
-		Ω_rot=20e2/Rsun,bounce_no=1,τ_ind_arr=nothing,kwargs...)
-
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
-		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν Nt
-
-		Cω_n1n2 = get(kwargs,:Cω,nothing)
-		∂ϕ₂Cω_n1n2 = get(kwargs,:∂ϕ₂Cω,nothing)
-
-		if isnothing(Cω_n1n2) && isnothing(∂ϕ₂Cω_n1n2)
-			Cω_n1n2,∂ϕ₂Cω_n1n2 = Cω_∂ϕ₂Cω(n1,n2_arr;kwargs...)
-		elseif isnothing(Cω_n1n2)
-			Cω_n1n2 = Cω(n1,n2_arr;kwargs...)
-		elseif isnothing(∂ϕ₂Cω_n1n2)
-			∂ϕ₂Cω_n1n2 = ∂ϕ₂Cω(n1,n2_arr;kwargs...)
-		end
-		
-		if isnothing(τ_ind_arr)
-			Ct_n1n2 = Ct(Cω_n1n2,dν)
-			τ_ind_arr = time_window_indices_by_fitting_bounce_peak(Ct_n1n2,
-								n1,n2_arr,dt=dt,Nt=Nt,bounce_no=bounce_no)
-		end
-
-		# h_t = get(kwargs,:ht,nothing)
-		# if isnothing(h_t)
-		# 	h_ω = get(kwargs,:hω,nothing)
-		# 	if isnothing(h_ω)
-		# 		h_t = ht(Cω_n1n2,n1,n2_arr;τ_ind_arr=τ_ind_arr,kwargs...) 
-		# 	else
-		# 		h_t = @fft_ω_to_t(h_ω)	
-		# 	end
-		# end
-
-		h_ω = get(kwargs,:hω,nothing)
-		h_t = get(kwargs,:ht, !isnothing(h_ω) ? @fft_ω_to_t(h_ω) :
-			ht(Cω_n1n2,n1,n2;τ_ind_arr=τ_ind_arr,kwargs...))
-
-		∂ϕ₂Ct_n1n2 = ∂ϕ₂Ct(∂ϕ₂Cω_n1n2,dν)
-		δC_t = δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_n1n2;
-											Ω_rot=Ω_rot,kwargs...)
-		
-		δτ = [sum(h_t[τ_ind_arr[n2ind],n2ind].*δC_t[τ_ind_arr[n2ind],n2ind])*dt 
-				for n2ind in 1:length(n2_arr)]
-	end
-
-	function traveltimes_validate(n1,n2;kwargs...)
-
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
-		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν
-
-		h_t = ht(n1,n2;kwargs...)
-		h_ω = @fft_t_to_ω(h_t)
-
-		δτ1 = δτ_uniform_rotation_firstborn_int_K_u(n1,n2;hω=h_ω,kwargs...)
-		@printf "%-50s %g\n" "First Born, ∫dr u(r) K(r)" round(δτ1,sigdigits=3)
-
-		δτ2 = δτ_uniform_rotation_firstborn_int_hω_δCω(n1,n2;hω=h_ω,kwargs...)
-		@printf "%-50s %g\n" "First Born, ∫dω/2π h(ω) δC_FB(ω)" round(δτ2,sigdigits=3)
-
-		δτ3 = δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1,n2;hω=h_ω,kwargs...)
-		@printf "%-50s %g\n" "Rotated frame, ∫dω/2π h(ω) δC_R_lin(ω)" round(δτ3,sigdigits=3)
-
-		δτ4 = δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1,n2;ht=h_t,kwargs...)
-		@printf "%-50s %g\n" "Rotated frame, ∫dt h(t) δC_R(t)" round(δτ4,sigdigits=3)
-
-		δτ5 = δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1,n2;ht=h_t,kwargs...)
-		@printf "%-50s %g\n" "Rotated frame, ∫dt h(t) δC_R_lin(t)" round(δτ5,sigdigits=3)
-	end
-
 	################################################################################################################
 	# All kernels
 	################################################################################################################
@@ -580,7 +382,7 @@ module kernel
 
 		dω = dν*2π
 
-		function summodes(rank,rank_node,np_node,channel_on_node)
+		function summodes(rank)
 		
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
@@ -694,7 +496,10 @@ module kernel
 		    		Yℓ_n2 = Ylmatrix(ℓ,x2,n_range=0:0)
 		    		Yℓ_n1 = Ylmatrix(ℓ,x1,n_range=0:0)
 
-		    		if (ℓ - ℓ_prev) == 1
+		    		if ℓ != first_mode[1] && ℓ == ℓ_prev
+		    			# re-use previously computed arrays
+		    			# nothing to do here
+		    		elseif ℓ - ℓ_prev == 1
 			    		# roll the Yℓ′ arrays
 			    		for ind in first(ℓ′_range)-ℓ:last(ℓ′_range)-ℓ-1
 			    			@. Yℓ′_n1_arr[ind] = Yℓ′_n1_arr[ind+1]
@@ -852,17 +657,7 @@ module kernel
 			close.(values(Gfn_fits_files_src))
 			close.(values(Gfn_fits_files_obs1))
 			close.(values(Gfn_fits_files_obs2))
-
-			if rank_node == 0
-				for n in 1:np_node-1
-					K .+= take!(channel_on_node)
-				end
-				put!(channel_on_node,K)
-			else
-				put!(channel_on_node,K)
-			end
-
-			return nothing
+			return K
 		end
 
 		procs_used = workers_active(ℓ_range,ν_ind_range)
@@ -891,7 +686,7 @@ module kernel
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
 
-		function summodes(rank,rank_node,np_node,channel_on_node)
+		function summodes(rank)
 
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
@@ -989,7 +784,10 @@ module kernel
 		 	   		Yℓ_n2 = Ylmatrix(ℓ,n2,n_range=0:0)
 		 	   		Yℓ_n1 = Ylmatrix(ℓ,n1,n_range=0:0)    
 	
-		 	   		if (ℓ - ℓ_prev) == 1
+					if ℓ != first_mode[1] && ℓ == ℓ_prev
+		    			# re-use previously computed arrays
+		    			# nothing to do here
+		 	   		elseif (ℓ - ℓ_prev) == 1
 			    		# roll the Yℓ′ arrays
 			    		for ind in first(ℓ′_range)-ℓ:last(ℓ′_range)-ℓ-1
 			    			@. Yℓ′_n1_arr[ind] = Yℓ′_n1_arr[ind+1]
@@ -1129,16 +927,7 @@ module kernel
 			close.(values(Gfn_fits_files_obs))
 			close.(values(Gfn_fits_files_src))
 
-			if rank_node == 0
-				for n in 1:np_node-1
-					K .+= take!(channel_on_node)
-				end
-				put!(channel_on_node,K)
-			else
-				put!(channel_on_node,K)
-			end
-
-			return nothing
+			return K
 		end
 		
 		procs_used = workers_active(ℓ_range,ν_ind_range)
@@ -1158,6 +947,165 @@ module kernel
 		end
 
 		return Kψ_imag
+	end
+end
+
+module traveltimes
+	using Main.kernel
+
+	uniform_rotation_uplus(Ω_rot=20e2/Rsun) = @. √(4π/3)*im*Ω_rot*r
+
+
+	function δτ_uniform_rotation_firstborn_int_K_u(x1,x2;Ω_rot=20e2/Rsun,kwargs...)
+		K₊ = kernel_uniform_rotation_uplus(x1,x2;kwargs...)
+		u⁺ = uniform_rotation_uplus(Ω_rot)
+
+		δτ = real.(simps((@. K₊*imag(u⁺)),r))
+	end
+
+	function δτ_uniform_rotation_firstborn_int_hω_δCω(n1,n2;Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dω ν_start_zeros Nν_Gfn
+
+		h_ω = get(kwargs,:hω,nothing)
+		if isnothing(h_ω)
+			h_ω = hω(n1,n2;bounce_no=bounce_no,kwargs...)
+		end
+		h_ω = h_ω[ν_start_zeros .+ (1:Nν_Gfn)] # only in range
+
+		δCω = δCω_uniform_rotation_firstborn_integrated_over_angle(n1,n2;
+			Ω_rot=Ω_rot,kwargs...)[ν_start_zeros .+ (1:Nν_Gfn)]
+
+		δτ = simps((@. 2real(conj(h_ω)*δCω)),dω/2π)
+	end
+
+	function δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1::Point2D,n2::Point2D;
+		Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dω ν_start_zeros Nν_Gfn
+
+		h_ω = get(kwargs,:hω,nothing)
+		if isnothing(h_ω)
+			h_ω = hω(n1,n2;bounce_no=bounce_no,kwargs...)
+		end
+		h_ω = h_ω[ν_start_zeros .+ (1:Nν_Gfn)] # only in range
+
+		δCω = δCω_uniform_rotation_rotatedwaves_linearapprox(n1,n2;
+			Ω_rot=Ω_rot,kwargs...)[ν_start_zeros .+ (1:Nν_Gfn)]
+
+		δτ = simps((@. 2real(conj(h_ω)*δCω)),dω/2π)
+	end
+
+	function δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1::Point2D,n2::Point2D;
+		Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
+
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dt Nt dν
+
+		Cω_n1n2 = Cω(n1,n2;kwargs...)
+		Ct_n1n2 = Ct(Cω_n1n2,dν)
+		τ_ind_arr = time_window_indices_by_fitting_bounce_peak(Ct_n1n2,n1,n2,dt=dt,Nt=Nt,bounce_no=bounce_no)
+
+		h_ω = get(kwargs,:hω,nothing)
+		h_t = get(kwargs,:ht, !isnothing(h_ω) ? @fft_ω_to_t(h_ω) :
+			ht(Cω_n1n2,n1,n2;τ_ind_arr=τ_ind_arr,kwargs...))
+		h_t = h_t[τ_ind_arr]
+
+		δC_t = δCt_uniform_rotation_rotatedwaves(n1,n2;Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,kwargs...)
+
+		δτ = simps((h_t.*δC_t.parent),dt)
+	end
+
+	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2::Point2D;
+		Ω_rot=20e2/Rsun,bounce_no=1,τ_ind_arr=nothing,kwargs...)
+
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν Nt
+
+		if isnothing(get(kwargs,:Cω,nothing)) && isnothing(get(kwargs,:∂ϕ₂Cω,nothing))
+			Cω_n1n2,∂ϕ₂Cω_n1n2 = Cω_∂ϕ₂Cω(n1,n2;kwargs...)
+		elseif isnothing(get(kwargs,:Cω,nothing))
+			Cω_n1n2 = Cω(n1,n2;kwargs...)
+		elseif isnothing(get(kwargs,:∂ϕ₂Cω,nothing))
+			∂ϕ₂Cω_n1n2 = ∂ϕ₂Cω(n1,n2;kwargs...)
+		end
+
+		if isnothing(τ_ind_arr)
+			Ct_n1n2 = Ct(Cω_n1n2,dν)
+			τ_ind_arr = time_window_indices_by_fitting_bounce_peak(Ct_n1n2,
+								n1,n2,dt=dt,Nt=Nt,bounce_no=bounce_no)
+		end
+
+		h_ω = get(kwargs,:hω,nothing)
+		h_t = get(kwargs,:ht, !isnothing(h_ω) ? @fft_ω_to_t(h_ω) :
+			ht(Cω_n1n2,n1,n2;τ_ind_arr=τ_ind_arr,kwargs...))
+
+		∂ϕ₂Ct_n1n2 = ∂ϕ₂Ct(∂ϕ₂Cω_n1n2,dν)
+		δC_t = δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_n1n2;
+											Ω_rot=Ω_rot,kwargs...)
+		
+		δτ = simps((h_t[τ_ind_arr].*δC_t[τ_ind_arr]),dt)
+	end
+
+	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2_arr::Vector{<:Point2D};
+		Ω_rot=20e2/Rsun,bounce_no=1,τ_ind_arr=nothing,kwargs...)
+
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν Nt
+
+		Cω_n1n2 = get(kwargs,:Cω,Cω(n1,n2_arr;kwargs...))
+		∂ϕ₂Cω_n1n2 = get(kwargs,:∂ϕ₂Cω,∂ϕ₂Cω(n1,n2_arr;kwargs...))
+		
+		if isnothing(τ_ind_arr)
+			Ct_n1n2 = Ct(Cω_n1n2,dν)
+			τ_ind_arr = time_window_indices_by_fitting_bounce_peak(Ct_n1n2,
+								n1,n2_arr,dt=dt,Nt=Nt,bounce_no=bounce_no)
+		end
+
+		h_ω = get(kwargs,:hω,nothing)
+		h_t = get(kwargs,:ht, !isnothing(h_ω) ? @fft_ω_to_t(h_ω) :
+			ht(Cω_n1n2,n1,n2;τ_ind_arr=τ_ind_arr,kwargs...))
+
+		∂ϕ₂Ct_n1n2 = ∂ϕ₂Ct(∂ϕ₂Cω_n1n2,dν)
+		δC_t = δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_n1n2;
+											Ω_rot=Ω_rot,kwargs...)
+
+		δτ = zeros(length(n2_arr))
+		for (n2ind,τ_inds) in enumerate(τ_ind_arr)
+			δτ[n2ind] = simps(h_t[τ_inds,n2ind].*δC_t[τ_inds,n2ind],dt)
+		end
+		return δτ
+	end
+
+	function traveltimes_validate(n1,n2;kwargs...)
+
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		Gfn_path_src = Gfn_path_from_source_radius(r_src)
+		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν
+
+		h_t = ht(n1,n2;kwargs...)
+		h_ω = @fft_t_to_ω(h_t)
+
+		δτ1 = δτ_uniform_rotation_firstborn_int_K_u(n1,n2;hω=h_ω,kwargs...)
+		@printf "%-50s %g\n" "First Born, ∫dr u(r) K(r)" round(δτ1,sigdigits=3)
+
+		δτ2 = δτ_uniform_rotation_firstborn_int_hω_δCω(n1,n2;hω=h_ω,kwargs...)
+		@printf "%-50s %g\n" "First Born, ∫dω/2π h(ω) δC_FB(ω)" round(δτ2,sigdigits=3)
+
+		δτ3 = δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1,n2;hω=h_ω,kwargs...)
+		@printf "%-50s %g\n" "Rotated frame, ∫dω/2π h(ω) δC_R_lin(ω)" round(δτ3,sigdigits=3)
+
+		δτ4 = δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1,n2;ht=h_t,kwargs...)
+		@printf "%-50s %g\n" "Rotated frame, ∫dt h(t) δC_R(t)" round(δτ4,sigdigits=3)
+
+		δτ5 = δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1,n2;ht=h_t,kwargs...)
+		@printf "%-50s %g\n" "Rotated frame, ∫dt h(t) δC_R_lin(t)" round(δτ5,sigdigits=3)
 	end
 end
 
@@ -1251,5 +1199,4 @@ module kernel3D
 
 	Kϕ_longitudinal_slice(x1,x2,s_max;kwargs...) = 
 		flow_latitudinal_slice(x1,x2,s_max;kwargs...,K_components=-1:-1)
-
 end

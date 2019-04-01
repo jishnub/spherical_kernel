@@ -151,12 +151,15 @@ function node_remotechannels(::Type{T},procs_used) where {T}
 	return rank_on_node,hostnames,num_procs_node,node_channels
 end
 
-function pmapsum(::Type{T},f,procs_used) where {T}
+function pmapsum(::Type{T},f,procs_used,args...;kwargs...) where {T}
+
 	rank_on_node,hostnames,num_procs_node,node_channels = node_remotechannels(T,procs_used)
-	
+
 	@sync for (rank,(p,hostname)) in enumerate(zip(procs_used,hostnames))
-		@async remotecall_wait(f,p,rank,rank_on_node[rank],
-			num_procs_node[hostname],node_channels[hostname])
+		@async remotecall_wait(apply_sum,p,f,rank,args...;
+			rank_node=rank_on_node[rank],
+			np_node=num_procs_node[hostname],
+			channel_on_node=node_channels[hostname],kwargs...)
 	end
 
 	# worker at which final reduction takes place
@@ -168,26 +171,35 @@ function pmapsum(::Type{T},f,procs_used) where {T}
 	return K
 end
 
-pmapsum(f,procs_used) = pmapsum(Array,f,procs_used)
+pmapsum(f,procs_used) = pmapsum(Any,f,procs_used)
 
-# macro reduce_at_node(rank_node,channel_on_node,np_node,arr)
+function sum_at_node!(::Type{T},var::T,rank_node,np_node,
+	channel_on_node::RemoteChannel{Channel{T}}) where {T}
 
-# 	return quote
-# 		if rank_node == 0
-# 			for n in 1:np_node-1
-# 				arr += take!(channel_on_node)
-# 			end
-# 			put!(channel_on_node,arr)
-# 		else
-# 			put!(channel_on_node,arr)
-# 		end
-# 	end
+	if iszero(rank_node)
+		for n in 1:np_node-1
+			var += take!(channel_on_node)
+		end
+		put!(channel_on_node,var)
+	else
+		put!(channel_on_node,var)
+	end
+	finalize(channel_on_node)
+end
 
-# end
+function sum_at_node!(var::T,rank_node,np_node,channel_on_node::RemoteChannel{Channel{T}}) where {T}
+	sum_at_node!(T,var,rank_node,np_node,channel_on_node)
+end
+
+function apply_sum(f,args...;rank_node,np_node,channel_on_node,kwargs...)
+	var = f(args...;kwargs...)
+	sum_at_node!(var,rank_node,np_node,channel_on_node)
+	return nothing
+end
 
 export split_product_across_processors,get_processor_id_from_split_array
 export get_processor_range_from_split_array,workers_active
 export get_index_in_split_array,procid_and_mode_index,minmax_from_split_array
-export node_remotechannels,pmapsum
+export node_remotechannels,pmapsum,sum_at_node!
 
 end # module
