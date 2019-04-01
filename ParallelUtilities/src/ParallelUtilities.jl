@@ -168,6 +168,8 @@ function pmapsum(::Type{T},f,procs_used) where {T}
 	return K
 end
 
+pmapsum(f,procs_used) = pmapsum(Array,f,procs_used)
+
 # macro reduce_at_node(rank_node,channel_on_node,np_node,arr)
 
 # 	return quote

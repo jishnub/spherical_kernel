@@ -324,7 +324,8 @@ module Greenfn_radial
 	end
 
 	const Rsun,nr,r,dr,ddr,c,ρ,g,N2,γ_damping = load_solar_model()
-	export Rsun,nr,r,dr,ddr,c,ρ,g,N2,γ_damping
+	const r_src_default = Rsun - 75e5
+	export Rsun,nr,r,dr,ddr,c,ρ,g,N2,γ_damping,r_src_default
 
 	function source(ω,ℓ;r_src=Rsun-75e5)
 
@@ -456,7 +457,7 @@ module Greenfn_radial
 		@save joinpath(Gfn_save_directory,"parameters.jld2") ν_arr ν_full dν dω ν_start_zeros ν_end_zeros Nν Nt dt T Nν_Gfn
 	end
 
-	function compute_Greenfn_components_allmodes_parallel(r_src=Rsun-75e5;ℓ_arr=1:100,kwargs...)
+	function compute_Greenfn_components_allmodes_parallel(r_src=r_src_default;ℓ_arr=1:100,kwargs...)
 
 		Gfn_save_directory = Gfn_path_from_source_radius(r_src)
 
@@ -546,7 +547,7 @@ module Greenfn_radial
 		return nothing
 	end
 
-	function compute_Greenfn_radial_components_allmodes_parallel(r_src=Rsun-75e5;ℓ_arr=1:100,kwargs...)
+	function compute_Greenfn_radial_components_allmodes_parallel(r_src=r_src_default;ℓ_arr=1:100,kwargs...)
 
 		Gfn_save_directory = Gfn_path_from_source_radius(r_src)
 

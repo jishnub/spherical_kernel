@@ -130,7 +130,7 @@ function plot_Ks0()
 	
 	f = FITS(kernel_file)
 	kernel = read(f[1])
-	smax = size(kernel,3)
+	s_max = size(kernel,3)
 	kernel = OffsetArray(kernel,axes(kernel,1),-1:1,axes(kernel,3))
 	close(f)
 
@@ -142,7 +142,7 @@ function plot_Ks0()
 
 	ax1 = subplot(311)
 	title("Kernel components for 60° separation")
-	for s=1:4:smax
+	for s=1:4:s_max
 		plot(r,kernel[:,0,s],label="s=$s")
 	end
 	ylabel("Kr_s0")
@@ -151,7 +151,7 @@ function plot_Ks0()
 	ax1[:xaxis][:set_major_formatter](ticker.NullFormatter())
 
 	ax2 =subplot(312)	
-	for s=1:4:smax
+	for s=1:4:s_max
 		plot(r,kernel[:,1,s],label="s=$s")
 	end
 	legend(loc="best")
@@ -161,7 +161,7 @@ function plot_Ks0()
 	ax2[:xaxis][:set_major_formatter](ticker.NullFormatter())
 
 	ax3 =subplot(313)
-	for s=1:4:smax
+	for s=1:4:s_max
 		plot(r,kernel[:,-1,s],label="s=$s")
 	end
 	ylabel("Kϕ_s0")
@@ -276,9 +276,9 @@ function plot_Ct_groups_of_modes(;t_max=6,t_min=0.3)
 	savefig("Ct_lranges.eps")
 end
 
-function plot_kernel_timing_scaling_benchmark(;smax=10,ℓ_range=20:20:100)
-	ns = 3; chunksize = max(1,div(smax-1,ns))
-	s_range = 1:chunksize:smax
+function plot_kernel_timing_scaling_benchmark(;s_max=10,ℓ_range=20:20:100)
+	ns = 3; chunksize = max(1,div(s_max-1,ns))
+	s_range = 1:chunksize:s_max
 	evaltime = zeros(length(s_range),length(ℓ_range))
 	for (ℓind,ℓ) in enumerate(ℓ_range),(s_ind,s) in enumerate(s_range)
 		evaltime[s_ind,ℓind] = @elapsed Main.kernel.flow_kernels_srange_t0(n1,n2,s,ℓ_range=20:ℓ);
@@ -328,4 +328,22 @@ function plot_h(x1,x2;kwargs...)
 	title("h(x₁,x₂,ω)")
 
 	tight_layout()
+end
+
+function plot_kernel_latitudinal_slice(θ₁,θ₂,s_max=10;kwargs...)
+	n1 = Point2D(θ₁,0)
+	n2 = Point2D(θ₂,0)
+
+	nθ = 100
+	θ = LinRange(0,π,nθ)
+
+	Kr_rθ = Kr_longitudinal_slice(n1,n2,s_max;K_components=0:0,nθ=nθ)
+
+	r = copy(Main.kernel.r)
+	c = copy(Main.kernel.c)
+	Rsun = Main.kernel.Rsun
+	r ./= Rsun
+
+	subplot(131)
+	plot(r,θ,Kr_rθ)
 end

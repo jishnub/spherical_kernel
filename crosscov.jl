@@ -9,9 +9,10 @@ module crosscov
 	using Reexport,DSP
 	@reexport using Main.Greenfn_radial
 	import Main.Greenfn_radial: Gfn_path_from_source_radius
+	@reexport using NumericallyIntegrateArray
 
 	@reexport using PyCall,FFTW
-	@pyimport scipy.integrate as integrate
+	# @pyimport scipy.integrate as integrate
 
 	@reexport using Legendre,PointsOnASphere,TwoPointFunctions,VectorFieldsOnASphere
 
@@ -20,8 +21,11 @@ module crosscov
 	export δCω_uniform_rotation_firstborn_integrated_over_angle
 	export δCω_uniform_rotation_rotatedwaves_linearapprox
 	export δCω_uniform_rotation_rotatedwaves,δCt_uniform_rotation_rotatedwaves,δCt_uniform_rotation_rotatedwaves_linearapprox
-	export intersect_fallback,time_window_indices_by_fitting_bounce_peak,time_window_bounce_filter
+	export time_window_indices_by_fitting_bounce_peak,time_window_bounce_filter
 	export @fft_ω_to_t,@fft_t_to_ω
+
+	const r_obs_default = Rsun - 75e5
+	export r_obs_default
 
 	Gfn_path_from_source_radius(x::Point3D) = Gfn_path_from_source_radius(x.r)
 
@@ -47,11 +51,6 @@ module crosscov
 	end
 
 	#######################################################################################################
-
-	intersect_fallback(::Nothing,default) = default
-	intersect_fallback(arr,default) = intersect(arr,default)
-
-	#######################################################################################################
 	
 	macro fft_t_to_ω(arr,dims=1) 
 		return esc(:(rfft($arr,$dims) .* dt))
@@ -64,16 +63,16 @@ module crosscov
 	#######################################################################################################
 
 
-	function Cω(x1::Point3D,x2::Point3D;r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing,kwargs...)
+	function Cω(x1::Point3D,x2::Point3D;kwargs...)
 		
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs Nν ν_start_zeros dν
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs Nν ν_start_zeros dω
 
 		Cω_arr = zeros(ComplexF64,Nν)
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
-		dω =2π*dν
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		function summodes(rank,rank_node,np_node,channel_on_node)
 
@@ -140,15 +139,16 @@ module crosscov
 		return Cω_arr
 	end
 
-	function Cω(x1::Point3D,x2_arr::Vector{<:Point3D};r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing,kwargs...)
+	function Cω(x1::Point3D,x2_arr::Vector{<:Point3D};kwargs...)
 		
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs Nν ν_start_zeros dν
 
 		Cω_arr = zeros(ComplexF64,length(x2_arr),Nν)
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		function summodes(rank,rank_node,np_node,channel_on_node)
 
@@ -225,15 +225,17 @@ module crosscov
 		copy(transpose(Cω_arr))
 	end
 
-	function Cω(n1::Point2D,n2_arr::Vector{<:Point2D};r_src=Rsun-75e5,r_obs=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing,kwargs...)
+	function Cω(n1::Point2D,n2_arr::Vector{<:Point2D};kwargs...)
 		
+		r_src = get(kwargs,:r_src,r_src_default)
+		r_obs = get(kwargs,:r_obs,r_obs_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs Nν ν_start_zeros dν
 
 		Cω_arr = zeros(ComplexF64,length(n2_arr),Nν)
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		function summodes(rank,rank_node,np_node,channel_on_node)
 
@@ -303,15 +305,17 @@ module crosscov
 	# Line-of-sight projected cross-covariance
 	########################################################################################################
 
-	function Cω_los(x1::Point3D,x2::Point3D;r_src=Rsun-75e5,ℓ_range=nothing,ν_ind_range=nothing,kwargs...)
+	function Cω_los(x1::Point3D,x2::Point3D;kwargs...)
 		
+		r_src = get(kwargs,:r_src,r_src_default)
+		r_obs = get(kwargs,:r_obs,r_obs_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs Nν ν_start_zeros dν
 
 		Cω_arr = zeros(ComplexF64,Nν)
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		function summodes(rank,rank_node,np_node,channel_on_node)
 
@@ -411,14 +415,14 @@ module crosscov
 	# Spectrum of C(ℓ,ω)
 	########################################################################################################	
 
-	function Cωℓ_spectrum(;ℓ_range=nothing,ν_ind_range=nothing,
-		r_src=Rsun-75e5,r_obs=Rsun-75e5,kwargs...)
-		
+	function Cωℓ_spectrum(;kwargs...)
+		r_src = get(kwargs,:r_src,r_src_default)
+		r_obs = get(kwargs,:r_obs,r_obs_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") ℓ_arr num_procs Nν_Gfn dν ν_start_zeros Nν
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
 
@@ -479,27 +483,27 @@ module crosscov
 	end
 
 	function Cωℓ_spectrum(ν::Real;kwargs...)
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr
 
 		ν_test_ind = argmin(abs.(ν_arr .- ν))
 
-		Cωℓ_spectrum(x1,x2;ν_ind_range=ν_test_ind:ν_test_ind,kwargs...)
+		Cωℓ_spectrum(;ν_ind_range=ν_test_ind:ν_test_ind,kwargs...)
 	end
 
 	########################################################################################################
 	# Derivatives of cross-covariance
 	########################################################################################################
 
-	function ∂ϕ₂Cω(x1::Point3D,x2::Point3D;
-		ℓ_range=nothing,ν_ind_range=nothing,r_src=Rsun-75e5,kwargs...)
+	function ∂ϕ₂Cω(x1::Point3D,x2::Point3D;kwargs...)
 		
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		function summodes(rank,rank_node,np_node,channel_on_node)
 
@@ -566,14 +570,14 @@ module crosscov
 		return Cω_arr
 	end
 
-	function ∂ϕ₂Cω(x1::Point3D,x2_arr::Vector{<:Point3D};
-		ℓ_range=nothing,ν_ind_range=nothing,r_src=Rsun-75e5,kwargs...)
+	function ∂ϕ₂Cω(x1::Point3D,x2_arr::Vector{<:Point3D};kwargs...)
 
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		∂ϕ₂Pl_cosχ = [dPl(cosχ(x1,x2),ℓmax=ℓ_range[end]) .* ∂ϕ₂cosχ(x1,x2) for x2 in x2_arr]
 
@@ -645,14 +649,15 @@ module crosscov
 		copy(transpose(Cω_arr))
 	end
 
-	function ∂ϕ₂Cω(n1::Point2D,n2_arr::Vector{<:Point2D};
-		ℓ_range=nothing,ν_ind_range=nothing,r_src=Rsun-75e5,r_obs=Rsun-75e5,kwargs...)
+	function ∂ϕ₂Cω(n1::Point2D,n2_arr::Vector{<:Point2D};kwargs...)
 
+		r_src = get(kwargs,:r_src,r_src_default)
+		r_obs = get(kwargs,:r_obs,r_obs_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν dω
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		∂ϕ₂Pl_cosχ = zeros(0:ℓ_range[end],length(n2_arr))
 		for (n2ind,n2) in enumerate(n2_arr)
@@ -720,13 +725,14 @@ module crosscov
 		copy(transpose(Cω_arr))
 	end
 
-	function Cω_∂ϕ₂Cω(x1::Point3D,x2::Point3D;ℓ_range=nothing,ν_ind_range=nothing,r_src=Rsun-75e5,kwargs...)
+	function Cω_∂ϕ₂Cω(x1::Point3D,x2::Point3D;kwargs...)
 		
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		function summodes(rank,rank_node,np_node,channel_on_node)
 
@@ -799,14 +805,15 @@ module crosscov
 		return Cω_arr[:,1],Cω_arr[:,2]
 	end
 
-	function Cω_∂ϕ₂Cω(n1::Point2D,n2::Point2D;ℓ_range=nothing,ν_ind_range=nothing,
-		r_src=Rsun-75e5,r_obs=Rsun-75e5,kwargs...)
+	function Cω_∂ϕ₂Cω(n1::Point2D,n2::Point2D;kwargs...)
 		
+		r_src = get(kwargs,:r_src,r_src_default)
+		r_obs = get(kwargs,:r_obs,r_obs_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		function summodes(rank,rank_node,np_node,channel_on_node)
 
@@ -872,14 +879,15 @@ module crosscov
 		return Cω_arr[:,1],Cω_arr[:,2]
 	end
 
-	function Cω_∂ϕ₂Cω(n1::Point2D,n2_arr::Vector{<:Point2D};ℓ_range=nothing,ν_ind_range=nothing,
-		r_src=Rsun-75e5,r_obs=Rsun-75e5,kwargs...)
-		
+	function Cω_∂ϕ₂Cω(n1::Point2D,n2_arr::Vector{<:Point2D};kwargs...)
+
+		r_src = get(kwargs,:r_src,r_src_default)
+		r_obs = get(kwargs,:r_obs,r_obs_default)		
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		∂ϕ₂Pl_cosχ = zeros(0:ℓ_range[end],length(n2_arr))
 		Pl_cosχ = zeros(0:ℓ_range[end],length(n2_arr))
@@ -963,7 +971,7 @@ module crosscov
 	########################################################################################################
 
 	function Ct(x1,x2;kwargs...)
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
 
@@ -977,7 +985,7 @@ module crosscov
 	Ct(n1,n2_arr::Vector;kwargs...) = Ct(n1,n2;kwargs...)
 
 	function ∂ϕ₂Ct(x1,x2;kwargs...)
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
 
@@ -986,7 +994,7 @@ module crosscov
 	end
 
 	function ∂ϕ₂Ct(n1,n2_arr::Vector;kwargs...)
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
 
@@ -1001,7 +1009,7 @@ module crosscov
 	# Cross-covariance at all distances on the equator, essentially the time-distance diagram
 	########################################################################################################
 
-	function CΔϕω(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;
+	function CΔϕω(r₁::Real=r_obs_default,r₂::Real=r_obs_default;
 		ℓ_range=nothing,r_src=Rsun-75e5,Δϕ_arr=nothing,ν_ind_range=nothing,kwargs...)
 
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
@@ -1010,8 +1018,8 @@ module crosscov
 		r₁_ind = argmin(abs.(r .- r₁))
 		r₂_ind = argmin(abs.(r .- r₂))
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 		ℓmax = maximum(ℓ_range)
 
 		if isnothing(Δϕ_arr) 
@@ -1089,9 +1097,9 @@ module crosscov
 		return Cϕω_arr
 	end
 
-	function CtΔϕ(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;τ_ind_arr=nothing,kwargs...) 
+	function CtΔϕ(r₁::Real=r_obs_default,r₂::Real=r_obs_default;τ_ind_arr=nothing,kwargs...) 
 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
 
@@ -1108,8 +1116,8 @@ module crosscov
 		return 
 	end
 
-	function CΔϕt(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;τ_ind_arr=nothing,kwargs...) 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+	function CΔϕt(r₁::Real=r_obs_default,r₂::Real=r_obs_default;τ_ind_arr=nothing,kwargs...) 
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src) 
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
 
@@ -1122,7 +1130,7 @@ module crosscov
 		return copy(transpose(@fft_ω_to_t(CωΔϕ)))[:,τ_ind_arr]
 	end
 
-	Cmω(r₁::Real=Rsun-75e5,r₂::Real=Rsun-75e5;kwargs...) = fft(CΔϕω(r₁,r₂;kwargs...),1)
+	Cmω(r₁::Real=r_obs_default,r₂::Real=r_obs_default;kwargs...) = fft(CΔϕω(r₁,r₂;kwargs...),1)
 
 	########################################################################################################
 	# Cross-covariance in a rotating frame
@@ -1133,7 +1141,7 @@ module crosscov
 		
 		# Return C(Δϕ,ω) = RFFT(C(Δϕ,τ)) = RFFT(IRFFT(C0(Δϕ - Ωτ,ω))(τ))
 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nt dt
 
@@ -1159,7 +1167,7 @@ module crosscov
 		
 		# Return C(Δϕ,ω) = RFFT(C(Δϕ,τ)) = RFFT(IRFFT(C0(Δϕ - Ωτ,ω))(τ))
 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nt dt
@@ -1198,7 +1206,7 @@ module crosscov
 	function δCω_uniform_rotation_firstborn_integrated_over_angle(x1::Point3D,x2::Point3D,ν::Real;
 		kwargs...)
 		
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 
 		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr
@@ -1209,8 +1217,9 @@ module crosscov
 	end
 
 	function δCω_uniform_rotation_firstborn_integrated_over_angle(x1::Point3D,x2::Point3D;
-		Ω_rot = 20e2/Rsun,ℓ_range=nothing,ν_ind_range=nothing,r_src=Rsun-75e5,kwargs...)
+		Ω_rot = 20e2/Rsun,kwargs...)
 		
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
 		Gfn_path_x2 = Gfn_path_from_source_radius(x2)
@@ -1223,8 +1232,8 @@ module crosscov
 		num_procs_obs1 = load(joinpath(Gfn_path_x1,"parameters.jld2"),"num_procs")
 		num_procs_obs2 = load(joinpath(Gfn_path_x2,"parameters.jld2"),"num_procs")
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		ℓmax = maximum(ℓ_arr)
 
@@ -1305,7 +1314,7 @@ module crosscov
 			close.(values(Gfn_fits_files_obs1))
 			close.(values(Gfn_fits_files_obs2))
 
-			δCω = OffsetArray(integrate.simps((@. r^2 * ρ * δC_r.parent),x=r,axis=0),axes(δC_r,2))
+			δCω = OffsetArray(simps((@. r^2 * ρ * δC_r),r),axes(δC_r,2))
 			if rank_node == 0
 				for n in 1:np_node-1
 					δCω += take!(channel_on_node)
@@ -1335,12 +1344,12 @@ module crosscov
 		
 		# We compute δC(x1,x2) = -iΩ ∑ℓ (2ℓ+1)/4π ∂ω (ω^2 P(ω) αℓω*(r₂)αℓω(r₁))∂Δϕ Pl(cos(Δϕ))
 		
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr dν ν_start_zeros
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr dω ν_start_zeros
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 
 		ν_test_ind = argmin(abs.(ν_arr .- ν))
 		ν_on_grid = ν_arr[ν_test_ind]
@@ -1349,7 +1358,6 @@ module crosscov
 
 		ν_ind_range = max(ν_test_ind-7,1):(ν_test_ind+min(7,ν_test_ind-1))
 		ν_match_index = ν_test_ind - ν_ind_range[1] + 1
-		dω = 2π*dν
 
 		∂ϕC = ∂ϕ₂Cω(x1,x2;ν_ind_range=ν_ind_range,kwargs...)[ν_ind_range .+ ν_start_zeros]
 
@@ -1363,11 +1371,9 @@ module crosscov
 
 		# We compute δC(x1,x2) = -iΩ ∑ℓ (2ℓ+1)/4π ∂ω (ω^2 P(ω) αℓω*(r₂)αℓω(r₁))∂Δϕ Pl(cos(Δϕ))
 		
-		r_src = get(kwargs,:r_src,Rsun-75e5)
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nν
-	
-		dω = 2π*dν
+		@load joinpath(Gfn_path_src,"parameters.jld2") dω Nν
 
 		∂ϕC = ∂ϕ₂Cω(x1,x2;kwargs...)
 
@@ -1398,7 +1404,7 @@ module crosscov
 	function δCt_uniform_rotation_rotatedwaves_linearapprox(x1::Point3D,x2::Point3D;
 		Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,kwargs...)
 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path = Gfn_path_from_source_radius(r_src)
 		@load "$Gfn_path/parameters.jld2" Nt dt
 		
@@ -1412,8 +1418,10 @@ module crosscov
 		end
 	end	
 
-	function δCt_uniform_rotation_rotatedwaves_linearapprox(x1::Point3D,x2_arr::Vector{<:Point3D};Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,kwargs...)
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+	function δCt_uniform_rotation_rotatedwaves_linearapprox(x1::Point3D,x2_arr::Vector{<:Point3D};
+		Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,kwargs...)
+
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path = Gfn_path_from_source_radius(r_src)
 		@load "$Gfn_path/parameters.jld2" Nt dt
 		
@@ -1443,7 +1451,7 @@ module crosscov
 	function δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_arr::Array{Float64};
 		Ω_rot = 20e2/Rsun,kwargs...)
 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path = Gfn_path_from_source_radius(r_src)
 		@load "$Gfn_path/parameters.jld2" Nt dt
 
@@ -1542,7 +1550,7 @@ module crosscov
 
 	function ht(Cω_x1x2::Array{ComplexF64},args...;bounce_no=1,kwargs...)
 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") ν_full Nt dt dν
 
@@ -1563,21 +1571,21 @@ module crosscov
 	end
 	
 
-	function ht(x1,x2;bounce_no=1,kwargs...)
+	function ht(x1,x2;kwargs...)
 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") ν_full Nt
 
 		Cω_x1x2 = Cω(x1,x2;kwargs...)
 		
-		ht(Cω_x1x2,x1,x2;bounce_no=bounce_no,kwargs...)
+		ht(Cω_x1x2,x1,x2;kwargs...)
 		
 	end
 
 	function hω(x1,x2;kwargs...)
 		
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt
 
@@ -1586,7 +1594,7 @@ module crosscov
 
 	function hω(Cω_x1x2::Array{ComplexF64},args...;kwargs...)
 		
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt
 
@@ -1603,8 +1611,8 @@ module crosscov
 		:δCω_uniform_rotation_firstborn_integrated_over_angle,:δCω_uniform_rotation_firstborn_integrated_over_angle,
 		:δCt_uniform_rotation_rotatedwaves,:δCt_uniform_rotation_rotatedwaves_linearapprox)
 
-		@eval $fn(n1::Point2D,n2::Point2D;r_obs::Real=Rsun-75e5,kwargs...) = $fn(Point3D(r_obs,n1),Point3D(r_obs,n2);kwargs...)
-		@eval $fn(Δϕ::Real;r_obs::Real=Rsun-75e5,kwargs...) = $fn(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ);kwargs...)
+		@eval $fn(n1::Point2D,n2::Point2D;r_obs::Real=r_obs_default,kwargs...) = $fn(Point3D(r_obs,n1),Point3D(r_obs,n2);kwargs...)
+		@eval $fn(Δϕ::Real;r_obs::Real=r_obs_default,kwargs...) = $fn(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ);kwargs...)
 	end
 
 end

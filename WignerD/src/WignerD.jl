@@ -3,14 +3,15 @@ using OffsetArrays, WignerSymbols, LinearAlgebra,Libdl
 
 using PointsOnASphere
 
-function djmatrix(j,θ;m_range=-j:j,n_range=-j:j)
-	dj = OffsetArray{Float64}(undef,m_range,n_range)
-	djmatrix!(dj,j,θ;m_range=m_range,n_range=n_range)
+function djmatrix(j,θ;kwargs...)
+	m_range=get(kwargs,:m_range,-j:j)
+	n_range=get(kwargs,:n_range,-j:j)
+	dj = zeros(m_range,n_range)
+	djmatrix!(dj,j,θ;m_range=m_range,n_range=n_range,kwargs...)
 	return dj
 end
 
-function djmatrix!(dj,j,θ;m_range=-j:j,n_range=-j:j)
-	N = 2j+1
+function Jy_eigen(j)
 	A = coeffi(j)
 	λ,v = eigen(A)
 	# We know that the eigenvalues of Jy are m ∈ -j:j, so we can round λ to integers and gain accuracy
@@ -23,6 +24,19 @@ function djmatrix!(dj,j,θ;m_range=-j:j,n_range=-j:j)
 		p = sortperm(λ)
 		v = OffsetArray(collect(transpose(v[:,p])),-j:j,-j:j)
 		λ = OffsetArray(λ[p],-j:j)
+	end
+	return λ,v
+end
+
+function djmatrix!(dj,j,θ::Real;kwargs...)
+
+	λ = get(kwargs,:λ,nothing)
+	v = get(kwargs,:v,nothing)
+	m_range=get(kwargs,:m_range,-j:j)
+	n_range=get(kwargs,:n_range,-j:j)
+
+	if isnothing(λ) || isnothing(v)
+		λ,v = Jy_eigen(j)
 	end
 
 	# check if symmetry conditions allow the index to be evaluated
@@ -79,27 +93,46 @@ function djmatrix!(dj,j,θ;m_range=-j:j,n_range=-j:j)
 end
 
 djmatrix(j,n::SphericalPoint;kwargs...) = djmatrix(j,n.θ;kwargs...)
-djmatrix(j,m,n,θ) = djmatrix(j,θ,m_range=m:m,n_range=n:n)
-djmatrix(j,m,n,n1::SphericalPoint) = djmatrix(j,n1.θ,m_range=m:m,n_range=n:n)
+djmatrix(j,m,n,θ::Real;kwargs...) = djmatrix(j,θ,m_range=m:m,n_range=n:n;kwargs...)
+djmatrix(j,m,n,n1::SphericalPoint;kwargs...) = djmatrix(j,n1.θ,m_range=m:m,n_range=n:n;kwargs...)
 
 djmatrix!(dj,j,n::SphericalPoint;kwargs...) = djmatrix(dj,j,n.θ;kwargs...)
-djmatrix!(dj,j,m,n,θ) = djmatrix(dj,j,θ,m_range=m:m,n_range=n:n)
-djmatrix!(dj,j,m,n,n1::SphericalPoint) = djmatrix(dj,j,n1.θ,m_range=m:m,n_range=n:n)
+djmatrix!(dj,j,m,n,θ::Real;kwargs...) = djmatrix(dj,j,θ,m_range=m:m,n_range=n:n;kwargs...)
+djmatrix!(dj,j,m,n,n1::SphericalPoint;kwargs...) = djmatrix(dj,j,n1.θ,m_range=m:m,n_range=n:n;kwargs...)
 
-function Ylmatrix(l,(θ,ϕ)::Tuple{<:Real,<:Real};m_range=-l:l,n_range=-1:1)
+function Ylmatrix(l,(θ,ϕ)::Tuple{<:Real,<:Real};kwargs...)
 
-	dj_θ = djmatrix(l,θ,m_range=m_range,n_range=n_range)
+	n_range=get(kwargs,:n_range,-1:1)
+
+	dj_θ = djmatrix(l,θ;kwargs...,n_range=n_range)
 	Y = OffsetArray{ComplexF64}(undef,axes(dj_θ)...)
-	Ylmatrix!(Y,dj_θ,l,(θ,ϕ);m_range=m_range,n_range=n_range,compute_d_matrix=false)
+	Ylmatrix!(Y,dj_θ,l,(θ,ϕ);n_range=n_range,kwargs...,compute_d_matrix=false)
 
 	return Y
 end
 
-function Ylmatrix!(Y,dj_θ,l,(θ,ϕ)::Tuple{<:Real,<:Real};
-	m_range=-l:l,n_range=-1:1,compute_d_matrix::Bool=true)
+function Ylmatrix(dj_θ::Array{Float64,2},l,(θ,ϕ)::Tuple{<:Real,<:Real};kwargs...)
 
+	n_range=get(kwargs,:n_range,-1:1)
+
+	compute_d_matrix = get(kwargs,:compute_d_matrix,true)
 	if compute_d_matrix
-		djmatrix!(dj_θ,l,θ,m_range=m_range,n_range=n_range)
+		djmatrix!(dj_θ,l,θ;kwargs...,n_range=n_range)
+	end
+	Y = OffsetArray{ComplexF64}(undef,axes(dj_θ)...)
+	Ylmatrix!(Y,dj_θ,l,(θ,ϕ);n_range=n_range,compute_d_matrix=false,kwargs...)
+
+	return Y
+end
+
+function Ylmatrix!(Y,dj_θ,l,(θ,ϕ)::Tuple{<:Real,<:Real};kwargs...)
+
+	n_range=get(kwargs,:n_range,-1:1)
+	m_range = get(kwargs,:m_range,-l:l)
+
+	compute_d_matrix = get(kwargs,:compute_d_matrix,true)
+	if compute_d_matrix
+		djmatrix!(dj_θ,l,θ;kwargs...,n_range=n_range)
 	end
 
 	@inbounds for (m,n) in Base.Iterators.product(m_range,n_range)

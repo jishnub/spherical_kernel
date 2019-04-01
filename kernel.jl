@@ -8,7 +8,7 @@ module kernel
 
 	using Reexport
 	@reexport using Main.crosscov
-	@pyimport scipy.integrate as integrate
+	# @pyimport scipy.integrate as integrate
 	import WignerSymbols: clebschgordan
 	using Libdl, WignerD, FileIO
 
@@ -18,10 +18,9 @@ module kernel
 
 	uniform_rotation_uplus(Ω_rot=20e2/Rsun) = @. √(4π/3)*im*Ω_rot*r
 
-	function kernel_uniform_rotation_uplus(x1::Point3D,x2::Point3D;
-		ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,kwargs...)
+	function kernel_uniform_rotation_uplus(x1::Point3D,x2::Point3D;kwargs...)
 		
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
@@ -32,15 +31,11 @@ module kernel
 		num_procs_obs1 = load(joinpath(Gfn_path_x1,"parameters.jld2"),"num_procs")
 		num_procs_obs2 = load(joinpath(Gfn_path_x2,"parameters.jld2"),"num_procs")
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
-		h_ω = get(kwargs,:hω,nothing)
-		if isnothing(h_ω)
-			h_ω = hω(x1,x2;bounce_no=bounce_no,kwargs...)
-		end
+		h_ω = get(kwargs,:hω,hω(x1,x2;r_src=r_src,kwargs...)) :: Vector{ComplexF64}
 		h_ω = h_ω[ν_start_zeros .+ ν_ind_range]
-		# h_ω_arr = hω(x1,x2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src)[ν_start_zeros .+ ν_ind_range] # only in range
 
 		r₁_ind = argmin(abs.(r .- x1.r))
 		r₂_ind = argmin(abs.(r .- x2.r))
@@ -52,7 +47,7 @@ module kernel
 
 			∂ϕ₂Pl_cosχ = dPl(cosχ(x1,x2),ℓmax=ℓ_arr[end]).*∂ϕ₂cosχ(x1,x2)
 
-			K = zeros(ComplexF64,nr)
+			K = zeros(nr)
 
 			δG_r₁_rsrc = zeros(ComplexF64,nr) # This is not actually δG, it's just a radial function dependent on f
 
@@ -121,7 +116,7 @@ module kernel
 				close(Gsrc_file)
 			end
 
-			@. K *= 4*√(3/4π)*im * r * ρ
+			@. K *= -4*√(3/4π) * r * ρ
 
 			if rank_node == 0
 				for n in 1:np_node-1
@@ -137,14 +132,13 @@ module kernel
 		procs_used = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs_used)
 
-		pmapsum(Vector{ComplexF64},summodes,procs_used)
+		pmapsum(Vector{Float64},summodes,procs_used)
 	end
 
-	function kernel_uniform_rotation_uplus(n1::Point2D,n2::Point2D;
-		ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,kwargs...)
+	function kernel_uniform_rotation_uplus(n1::Point2D,n2::Point2D;kwargs...)
 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
-		r_obs = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_obs = get(kwargs,:r_obs,r_obs_default) :: Float64
 
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_obs = Gfn_path_from_source_radius(r_obs)
@@ -153,8 +147,8 @@ module kernel
 
 		num_procs_obs = load(joinpath(Gfn_path_obs,"parameters.jld2"),"num_procs")
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
 
@@ -162,7 +156,7 @@ module kernel
 		
 		h_ω = get(kwargs,:hω,nothing)
 		if isnothing(h_ω)
-			h_ω = hω(n1,n2;bounce_no=bounce_no,kwargs...)
+			h_ω = hω(n1,n2;r_src=r_src,r_obs=r_obs,kwargs...)
 		end
 		h_ω = h_ω[ν_start_zeros .+ ν_ind_range]
 
@@ -177,7 +171,7 @@ module kernel
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 			Gfn_fits_files_obs = Gfn_fits_files(Gfn_path_obs,proc_id_range_Gobs)
 
-			K = zeros(ComplexF64,nr)
+			K = zeros(nr)
 
 			δG_robs_rsrc = zeros(ComplexF64,nr) # This is not actually δG, it's just a radial function dependent on f
 
@@ -226,7 +220,7 @@ module kernel
 			close.(values(Gfn_fits_files_src))
 			close.(values(Gfn_fits_files_obs))
 
-			@. K *= 4*√(3/4π)*im * r * ρ
+			@. K *= -4*√(3/4π) * r * ρ
 
 			if rank_node == 0
 				for n in 1:np_node-1
@@ -242,13 +236,15 @@ module kernel
 		procs_used = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs_used)
 
-		pmapsum(Vector{ComplexF64},summodes,procs_used)
+		pmapsum(Vector{Float64},summodes,procs_used)
 	end
 	
 	function kernel_uniform_rotation_uplus(n1::Point2D,n2_arr::Vector{<:Point2D};
 		Cω_arr=Array{Nothing,2}(undef,1,length(n2_arr)),
-		hω_arr=nothing,
-		ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,r_src=Rsun-75e5,r_obs=Rsun-75e5,kwargs...)
+		hω_arr=nothing,kwargs...)
+
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_obs = get(kwargs,:r_obs,r_obs_default) :: Float64
 
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_obs = Gfn_path_from_source_radius(r_obs)
@@ -257,8 +253,8 @@ module kernel
 
 		num_procs_obs = load(joinpath(Gfn_path_obs,"parameters.jld2"),"num_procs")
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
 
@@ -271,7 +267,7 @@ module kernel
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 			Gfn_fits_files_obs = Gfn_fits_files(Gfn_path_obs,proc_id_range_Gobs)
 
-			K = zeros(ComplexF64,nr,length(n2_arr))
+			K = zeros(nr,length(n2_arr))
 
 			δG_robs_rsrc = zeros(ComplexF64,nr) # This is not actually δG, it's just a radial function dependent on f
 
@@ -327,7 +323,7 @@ module kernel
 			close.(values(Gfn_fits_files_src))
 			close.(values(Gfn_fits_files_obs))
 
-			@. K *= 4*√(3/4π)*im * r * ρ
+			@. K *= -4*√(3/4π) * r * ρ
 
 			if rank_node == 0
 				for n in 1:np_node-1
@@ -347,14 +343,13 @@ module kernel
 		end
 		∂ϕ₂Pl_cosχ_arr = copy(transpose(∂ϕ₂Pl_cosχ_arr))
 		
-		
 		if  isnothing(hω_arr)
 			hω_arr = zeros(ν_ind_range,length(n2_arr))
 			τ_ind_arr = get(kwargs,:τ_ind_arr,nothing)
 			for (n2ind,n2) in enumerate(n2_arr)
-				hω_arr[ν_ind_range,n2ind] = hω(Cω_arr[:,n2ind],n1,n2,bounce_no=bounce_no,
-				ℓ_range=ℓ_range,τ_ind_arr=τ_ind_arr[n2ind],
-				r_src=r_src,r_obs=r_obs)[ν_start_zeros .+ ν_ind_range]
+				hω_arr[ν_ind_range,n2ind] = hω(Cω_arr[:,n2ind],n1,n2;
+				τ_ind_arr=τ_ind_arr[n2ind],
+				r_src=r_src,r_obs=r_obs,kwargs...)[ν_start_zeros .+ ν_ind_range]
 			end
 			hω_arr = copy(transpose(hω_arr)) :: Array{ComplexF64,2}
 		else
@@ -368,16 +363,15 @@ module kernel
 
 		prog_bar = Progress(num_workers,1,"First born travel times : ")
 
-		K₊ = zeros(ComplexF64,nr,length(n2_arr))
+		K₊ = zeros(Float64,nr,length(n2_arr))
 		@sync begin
-			@async K₊ .= pmapsum(Array{ComplexF64,2},summodes,procs_used)
+			@async K₊ .= pmapsum(Array{Float64,2},summodes,procs_used)
 			@async for n in 1:num_workers
 				take!(tracker)
 				next!(prog_bar)
 			end
 		end
 
-		close(tracker)
 		return K₊
 	end
 
@@ -385,11 +379,11 @@ module kernel
 		K₊ = kernel_uniform_rotation_uplus(x1,x2;kwargs...)
 		u⁺ = uniform_rotation_uplus(Ω_rot)
 
-		δτ = real.(integrate.simps(K₊.*u⁺,x=r,axis=0))
+		δτ = real.(simps((@. K₊*imag(u⁺)),r))
 	end
 
 	function δτ_uniform_rotation_firstborn_int_hω_δCω(n1,n2;Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dω ν_start_zeros Nν_Gfn
 
@@ -402,13 +396,13 @@ module kernel
 		δCω = δCω_uniform_rotation_firstborn_integrated_over_angle(n1,n2;
 			Ω_rot=Ω_rot,kwargs...)[ν_start_zeros .+ (1:Nν_Gfn)]
 
-		δτ = sum(@. dω/2π * 2real(conj(h_ω)*δCω))
+		δτ = simps((@. 2real(conj(h_ω)*δCω)),dω/2π)
 	end
 
 	function δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1::Point2D,n2::Point2D;
 		Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dω ν_start_zeros Nν_Gfn
 
@@ -421,13 +415,14 @@ module kernel
 		δCω = δCω_uniform_rotation_rotatedwaves_linearapprox(n1,n2;
 			Ω_rot=Ω_rot,kwargs...)[ν_start_zeros .+ (1:Nν_Gfn)]
 
-		δτ = sum(@. dω/2π * 2real(conj(h_ω)*δCω))
+		δτ = simps((@. 2real(conj(h_ω)*δCω)),dω/2π)
+		# δτ = sum(@. dω/2π * 2real(conj(h_ω)*δCω))
 	end
 
 	function δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1::Point2D,n2::Point2D;
 		Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt Nt dν
 
@@ -448,13 +443,13 @@ module kernel
 
 		δC_t = δCt_uniform_rotation_rotatedwaves(n1,n2;Ω_rot=Ω_rot,τ_ind_arr=τ_ind_arr,kwargs...)
 
-		δτ = sum(h_t.*δC_t.parent)*dt
+		δτ = simps((h_t.*δC_t.parent),dt)
 	end
 
 	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2::Point2D;
 		Ω_rot=20e2/Rsun,bounce_no=1,τ_ind_arr=nothing,kwargs...)
 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν Nt
 
@@ -465,32 +460,28 @@ module kernel
 		elseif isnothing(get(kwargs,:∂ϕ₂Cω,nothing))
 			∂ϕ₂Cω_n1n2 = ∂ϕ₂Cω(n1,n2;kwargs...)
 		end
-		
+
 		if isnothing(τ_ind_arr)
 			Ct_n1n2 = Ct(Cω_n1n2,dν)
 			τ_ind_arr = time_window_indices_by_fitting_bounce_peak(Ct_n1n2,
 								n1,n2,dt=dt,Nt=Nt,bounce_no=bounce_no)
 		end
 
-		if isnothing(get(kwargs,:ht,nothing))
-			if isnothing(get(kwargs,:hω,nothing))
-				h_t = ht(Cω_n1n2,n1,n2;τ_ind_arr=τ_ind_arr,kwargs...)
-			else
-				h_t = @fft_ω_to_t(h_ω)	
-			end
-		end
+		h_ω = get(kwargs,:hω,nothing)
+		h_t = get(kwargs,:ht, !isnothing(h_ω) ? @fft_ω_to_t(h_ω) :
+			ht(Cω_n1n2,n1,n2;τ_ind_arr=τ_ind_arr,kwargs...))
 
 		∂ϕ₂Ct_n1n2 = ∂ϕ₂Ct(∂ϕ₂Cω_n1n2,dν)
 		δC_t = δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_n1n2;
 											Ω_rot=Ω_rot,kwargs...)
 		
-		δτ = sum(h_t[τ_ind_arr].*δC_t[τ_ind_arr])*dt
+		δτ = simps((h_t[τ_ind_arr].*δC_t[τ_ind_arr]),dt)
 	end
 
 	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2_arr::Vector{<:Point2D};
 		Ω_rot=20e2/Rsun,bounce_no=1,τ_ind_arr=nothing,kwargs...)
 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν Nt
 
@@ -511,15 +502,19 @@ module kernel
 								n1,n2_arr,dt=dt,Nt=Nt,bounce_no=bounce_no)
 		end
 
-		h_t = get(kwargs,:ht,nothing)
-		if isnothing(h_t)
-			h_ω = get(kwargs,:hω,nothing)
-			if isnothing(h_ω)
-				h_t = ht(Cω_n1n2,n1,n2_arr;τ_ind_arr=τ_ind_arr,kwargs...) 
-			else
-				h_t = @fft_ω_to_t(h_ω)	
-			end
-		end
+		# h_t = get(kwargs,:ht,nothing)
+		# if isnothing(h_t)
+		# 	h_ω = get(kwargs,:hω,nothing)
+		# 	if isnothing(h_ω)
+		# 		h_t = ht(Cω_n1n2,n1,n2_arr;τ_ind_arr=τ_ind_arr,kwargs...) 
+		# 	else
+		# 		h_t = @fft_ω_to_t(h_ω)	
+		# 	end
+		# end
+
+		h_ω = get(kwargs,:hω,nothing)
+		h_t = get(kwargs,:ht, !isnothing(h_ω) ? @fft_ω_to_t(h_ω) :
+			ht(Cω_n1n2,n1,n2;τ_ind_arr=τ_ind_arr,kwargs...))
 
 		∂ϕ₂Ct_n1n2 = ∂ϕ₂Ct(∂ϕ₂Cω_n1n2,dν)
 		δC_t = δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_n1n2;
@@ -531,7 +526,7 @@ module kernel
 
 	function traveltimes_validate(n1,n2;kwargs...)
 
-		r_src = get(kwargs,:r_src,Rsun-75e5) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν
 
@@ -561,8 +556,9 @@ module kernel
 	Nℓ′ℓs(ℓ′,ℓ,s) = √((2ℓ+1)*(2ℓ′+1)/(4π*(2s+1)))
 
 	function flow_axisymmetric_srange(x1::Point3D,x2::Point3D,s_max;
-		ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,r_src=Rsun-75e5,K_components=-1:1)
+		K_components=-1:1,kwargs...)
 
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
 		Gfn_path_x2 = Gfn_path_from_source_radius(x2)
@@ -572,10 +568,10 @@ module kernel
 		num_procs_x1 = load(joinpath(Gfn_path_x1,"parameters.jld2"),"num_procs")
 		num_procs_x2 = load(joinpath(Gfn_path_x2,"parameters.jld2"),"num_procs")
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 		
-		h_ω_arr = h(x1,x2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src).h_ω[ν_start_zeros .+ ν_ind_range] # only in range
+		h_ω_arr = hω(x1,x2;r_src=r_src,kwargs...)[ν_start_zeros .+ ν_ind_range] # only in range
 
 		r₁_ind = argmin(abs.(r .- x1.r))
 		r₂_ind = argmin(abs.(r .- x2.r))
@@ -823,10 +819,9 @@ module kernel
 			    			end
 
 			    			if isodd(ℓ+ℓ′+s) && -1 in K_components
-			    				# tangential - component (K⁺ - K⁻), only for odd l+l′+s
-								# only imag part calculated, the actual kernel is iK
+			    				# tangential - component i(K⁺ - K⁻), only for odd l+l′+s
 								# extra factor of 2 from the (1 - (-1)^(ℓ+ℓ′+s)) term
-								@. K[:,-1,s] += 2 * dω/2π * ω^3 * Powspec(ω) * Nℓ′ℓs(ℓ′,ℓ,s) * 
+								@. K[:,-1,s] += -2 * dω/2π * ω^3 * Powspec(ω) * Nℓ′ℓs(ℓ′,ℓ,s) * 
 					     					2real(conj(h_ω_arr[ω_ind]) *
 					     					(conj(fℓ′ℓsω_r₁[:,1])*G_r₂_rsrc*conj(Yℓ′ℓ_s0_n1n2[s]) 
 					     						+ conj(G_r₁_rsrc)*fℓ′ℓsω_r₂[:,1]*Yℓ′ℓ_s0_n2n1[s]) )
@@ -878,23 +873,23 @@ module kernel
 	end
 
 	function flow_axisymmetric_srange(n1::Point2D,n2::Point2D,s_max;
-		ℓ_range=nothing,ν_ind_range=nothing,bounce_no=1,r_src=Rsun-75e5,r_obs=Rsun-75e5,K_components=-1:1)
+		K_components=-1:1,kwargs...)
 
+		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_obs = get(kwargs,:r_obs,r_obs_default) :: Float64
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_obs = Gfn_path_from_source_radius(r_obs)
 
-		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs dν ν_start_zeros
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs dω ν_start_zeros
 
 		num_procs_obs = load(joinpath(Gfn_path_obs,"parameters.jld2"),"num_procs")
 
-		ℓ_range = intersect_fallback(ℓ_range,ℓ_arr)
-		ν_ind_range = intersect_fallback(ν_ind_range,1:Nν_Gfn)
+		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
+		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 		
-		h_ω_arr = h(n1,n2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src,r_obs=r_obs).h_ω[ν_start_zeros .+ ν_ind_range] # only in range
+		h_ω_arr = hω(n1,n2;r_src=r_src,r_obs=r_obs,kwargs...)[ν_start_zeros .+ ν_ind_range] # only in range
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
-
-		dω = dν*2π
 
 		function summodes(rank,rank_node,np_node,channel_on_node)
 
@@ -1101,10 +1096,9 @@ module kernel
 			    			end
 
 			    			if isodd(ℓ+ℓ′+s) && -1 in K_components
-			    				# tangential - component (K⁺ - K⁻), only for odd l+l′+s
-								# only imag part calculated, the actual kernel is iK
+			    				# tangential - component i(K⁺ - K⁻), only for odd l+l′+s
 								# extra factor of 2 from the (1 - (-1)^(ℓ+ℓ′+s)) term
-								@. K[:,-1,s] += 2 * dω/2π * ω^3 * Powspec(ω) * Nℓ′ℓs(ℓ′,ℓ,s) * 
+								@. K[:,-1,s] += -2 * dω/2π * ω^3 * Powspec(ω) * Nℓ′ℓs(ℓ′,ℓ,s) * 
 					     					2real(conj(h_ω_arr[ω_ind]) *
 					     					(conj(fℓ′ℓsω_robs[:,1])*G_robs_rsrc*conj(Yℓ′ℓ_s0_n1n2[s]) 
 					     						+ conj(G_robs_rsrc)*fℓ′ℓsω_robs[:,1]*Yℓ′ℓ_s0_n2n1[s]) )
@@ -1154,37 +1148,108 @@ module kernel
 		return pmapsum(T,summodes,procs_used)
 	end
 
-	function meridional_flow_ψ_srange(x1::SphericalPoint,x2::SphericalPoint,s_max;kwargs...)
+	function meridional_flow_ψ_srange(x1,x2,s_max;kwargs...)
 		Kv = flow_kernels_srange_t0(x1,x2,s_max;K_components=0:1,kwargs...)
 
 		Kψ_imag = zeros(nr,1:s_max)
 
-		# negative of the imaginary part of the stream function kernel
 		@inbounds for s in axes(Kψ_imag,2)
 			Kψ_imag[:,s] .= ddr*(Kv[:,1,s]./ρ) .+ @. Kv[:,1,s]/(ρ*r) - 2*Ω(s,0)*Kv[:,0,s]/(ρ*r)
 		end
 
-		Kψ_imag .*= -1 # there's an overall minus sign that was not included in the expression above
-
-		# Imaginary part of kernel, actual kernel is im*K
 		return Kψ_imag
 	end
 end
 
-# module kernel3D
-# 	using Main.kernel
-# 	import WignerD: Ylmatrix
+module kernel3D
+	using Main.kernel
+	import WignerD: Ylmatrix
 
-# 	function axisymmetric_flow_kernels_rθ_slice(x1::SphericalPoint,x2::SphericalPoint,s_max;kwargs...)
-# 		Kjlm_r = flow_kernels_srange(x1,x2,s_max;kwargs...)
-# 		θ_arr = LinRange(0,π,nθ)
-# 		# Slice at ϕ=0
-# 		n_arr = [Point2D(θ,0) for θ in θ_arr]
+	function flow_longitudinal_slice(x1,x2,s_max;kwargs...)
+		
+		K′jl0_r = flow_axisymmetric_srange(x1,x2,s_max;kwargs...)
+		Kjl0_r = similar(K′jl0_r)
 
-# 		K2D_r_θ = zeros(size(Kjlm_r,1))
+		@. Kjl0_r[:,0,:] = K′jl0_r[:,0,:]
+		# verify these relations
+		@. Kjl0_r[:,1,:] = (K′jl0_r[:,1,:] + K′jl0_r[:,-1,:])
+		@. Kjl0_r[:,-1,:] = (K′jl0_r[:,1,:] - K′jl0_r[:,-1,:])
 
-# 		# The 3D kernel is given by ∑ₛₙ Ks0n(r)* Ys0n(θ,ϕ)
+		nθ = get(kwargs,:nθ,20) :: Integer
+		K_components = get(kwargs,:K_components,-1:1)
+		θ_arr = LinRange(0,π,nθ)
+		# Slice at ϕ=0
 
+		K2D_r_θ = zeros(ComplexF64,nr,K_components,nθ)
 
-# 	end
-# end
+		# The 3D kernel is given by ∑ₛₙ Ks0n(r)* Ys0n(θ,ϕ)
+		# For axisymmetric flows the r and θ components of the kernel are real
+
+		for s in 1:s_max
+			λ,v = Jy_eigen(s)
+			ds_θ = zeros(0:0,-1:1)
+			for (θind,θ) in enumerate(θ_arr)
+				Ys0n = Ylmatrix(ds_θ,s,(θ,0),
+					compute_d_matrix=true,λ=λ,v=v,
+					m_range=0:0,n_range=K_components)
+				
+				@. K2D_r_θ[:,:,θind] += Kjl0_r[:,:,s].*Ys0n[0,:]
+			end
+		end
+
+		return real.(K2D_r_θ)
+	end
+
+	function flow_latitudinal_slice(x1,x2,s_max;kwargs...)
+		
+		K′jl0_r = flow_axisymmetric_srange(x1,x2,s_max;kwargs...)
+		Kjl0_r = similar(K′jl0_r)
+
+		@. Kjl0_r[:,0,:] = K′jl0_r[:,0,:]
+		# verify these relations
+		@. Kjl0_r[:,1,:] = (K′jl0_r[:,1,:] + K′jl0_r[:,-1,:])
+		@. Kjl0_r[:,-1,:] = (K′jl0_r[:,1,:] - K′jl0_r[:,-1,:])
+
+		nϕ = get(kwargs,:nϕ,20) :: Integer
+		K_components = get(kwargs,:K_components,-1:1)
+		ϕ_arr = LinRange(0,2π,nϕ)
+		# Slice at ϕ=0
+
+		K2D_r_ϕ = zeros(ComplexF64,nr,K_components,nϕ)
+
+		# The 3D kernel is given by ∑ₛₙ Ks0n(r)* Ys0n(θ,ϕ)
+		# For axisymmetric flows the r and θ components of the kernel are real
+
+		for s in 1:s_max
+			λ,v = Jy_eigen(s)
+			ds_θ = djmatrix(s,π/2,n_range=-1:1)
+			for (ϕind,ϕ) in enumerate(ϕ_arr)
+				Ys0n = Ylmatrix(ds_θ,s,(π/2,ϕ),
+					compute_d_matrix=false,m_range=0:0,n_range=K_components)
+				
+				@. K2D_r_θ[:,:,ϕind] += Kjl0_r[:,:,s].*Ys0n[0,:]
+			end
+		end
+
+		return real.(K2D_r_θ)
+	end
+
+	Kr_longitudinal_slice(x1,x2,s_max;kwargs...) = 
+		flow_longitudinal_slice(x1,x2,s_max;kwargs...,K_components=0:0)
+	
+	Kθ_longitudinal_slice(x1,x2,s_max;kwargs...) = 
+		flow_longitudinal_slice(x1,x2,s_max;kwargs...,K_components=1:1)
+
+	Kϕ_longitudinal_slice(x1,x2,s_max;kwargs...) = 
+		flow_longitudinal_slice(x1,x2,s_max;kwargs...,K_components=-1:-1)
+
+	Kr_longitudinal_slice(x1,x2,s_max;kwargs...) = 
+		flow_latitudinal_slice(x1,x2,s_max;kwargs...,K_components=0:0)
+	
+	Kθ_longitudinal_slice(x1,x2,s_max;kwargs...) = 
+		flow_latitudinal_slice(x1,x2,s_max;kwargs...,K_components=1:1)
+
+	Kϕ_longitudinal_slice(x1,x2,s_max;kwargs...) = 
+		flow_latitudinal_slice(x1,x2,s_max;kwargs...,K_components=-1:-1)
+
+end
