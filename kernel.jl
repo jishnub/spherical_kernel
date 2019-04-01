@@ -365,7 +365,7 @@ module kernel
 		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
 		Gfn_path_x2 = Gfn_path_from_source_radius(x2)
 
-		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs dν ν_start_zeros
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs dω ν_start_zeros
 
 		num_procs_x1 = load(joinpath(Gfn_path_x1,"parameters.jld2"),"num_procs")
 		num_procs_x2 = load(joinpath(Gfn_path_x2,"parameters.jld2"),"num_procs")
@@ -380,11 +380,9 @@ module kernel
 
 		obs_at_same_height = r₁_ind == r₂_ind
 
-		dω = dν*2π
-
 		function summodes(rank)
 		
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
+			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank) |> collect
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 
@@ -394,7 +392,7 @@ module kernel
 
 			# Gℓ′ω(r,robs) files
 			first_mode = first(ℓ_ωind_iter_on_proc)
-			last_mode = last(collect(ℓ_ωind_iter_on_proc))
+			last_mode = last(ℓ_ωind_iter_on_proc)
 			ℓ′_min_first_mode = max(minimum(ℓ_arr),abs(first_mode[1]-s_max))
 			ℓ′_max_last_mode = min(maximum(ℓ_arr),last_mode[1]+s_max)
 			modes_minmax = minmax_from_split_array(ℓ_ωind_iter_on_proc)
@@ -461,6 +459,11 @@ module kernel
 			# if ℓ changes by 1 arrays can be rolled
 			# if the ℓ wraps back then δℓ will be negative. 
 			# In this case we need to recompute the Yℓ′ arrays
+			# Start by sorting the modes on the processor so that 
+			# the ℓ's are in order
+
+			ℓ_ωind_iter_on_proc = sort(ℓ_ωind_iter_on_proc,by=x->x[1])
+
 			ℓ_prev = first_mode[1]
 
 			# Loop over the Greenfn files
@@ -688,7 +691,7 @@ module kernel
 
 		function summodes(rank)
 
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
+			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank) |> collect
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 
@@ -698,7 +701,7 @@ module kernel
 
 			# Gℓ′ω(r,robs) files
 			first_mode = first(ℓ_ωind_iter_on_proc)
-			last_mode = last(collect(ℓ_ωind_iter_on_proc))
+			last_mode = last(ℓ_ωind_iter_on_proc)
 			ℓ′_min_first_mode = max(minimum(ℓ_arr),abs(first_mode[1]-s_max))
 			ℓ′_max_last_mode = min(maximum(ℓ_arr),last_mode[1]+s_max)
 			modes_minmax = minmax_from_split_array(ℓ_ωind_iter_on_proc)
@@ -750,6 +753,10 @@ module kernel
 			# if ℓ changes by 1 arrays can be rolled
 			# if the ℓ wraps back then δℓ will be negative. 
 			# In this case we need to recompute the Yℓ′ arrays
+			# Start by sorting the modes on the processor so that 
+			# the ℓ's are in order
+
+			ℓ_ωind_iter_on_proc = sort(ℓ_ωind_iter_on_proc,by=x->x[1])
 			ℓ_prev = first_mode[1]
 
 			# Loop over the Greenfn files
