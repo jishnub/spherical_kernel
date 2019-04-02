@@ -37,8 +37,10 @@ function djmatrix!(dj,j,θ::Real;kwargs...)
 	m_range=get(kwargs,:m_range,-j:j)
 	n_range=get(kwargs,:n_range,-j:j)
 
-	if isnothing(λ) || isnothing(v)
+	if isnothing(λ) && isnothing(v)
 		λ,v = Jy_eigen(j)
+	elseif isnothing(λ)
+		λ = Float64.(-j:j)
 	end
 
 	# check if symmetry conditions allow the index to be evaluated

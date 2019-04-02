@@ -121,7 +121,7 @@ module crosscov
 		procs_used = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs_used)
 
-		T = OffsetArray{ComplexF64,1,Vector{ComplexF64}}
+		T = OffsetVector{ComplexF64,Vector{ComplexF64}}
 		Cω_in_range = pmapsum(T,summodes,procs_used)
 
 		Cω_arr[axes(Cω_in_range)...] .= Cω_in_range
@@ -356,13 +356,13 @@ module crosscov
 	########################################################################################################
 
 	for fn in (:Cω,:Cω_los)
-		@eval $fn(n1::Point2D,n2::Point2D;r_obs::Real=Rsun-75e5,kwargs...) = $fn(Point3D(r_obs,n1),Point3D(r_obs,n2);kwargs...)
-		@eval $fn(Δϕ::Real;r_obs::Real=Rsun-75e5,kwargs...) = $fn(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ);kwargs...)
-		@eval $fn(n1::Point2D,n2::Point2D,ν::Real;r_obs::Real=Rsun-75e5,kwargs...) = $fn(Point3D(r_obs,n1),Point3D(r_obs,n2),ν;kwargs...)
-		@eval $fn(Δϕ::Real,ν::Real;r_obs::Real=Rsun-75e5,kwargs...) = $fn(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ν;kwargs...)
+		@eval $fn(n1::Point2D,n2::Point2D;r_obs::Real=r_obs_default,kwargs...) = $fn(Point3D(r_obs,n1),Point3D(r_obs,n2);kwargs...)
+		@eval $fn(Δϕ::Real;r_obs::Real=r_obs_default,kwargs...) = $fn(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ);kwargs...)
+		@eval $fn(n1::Point2D,n2::Point2D,ν::Real;r_obs::Real=r_obs_default,kwargs...) = $fn(Point3D(r_obs,n1),Point3D(r_obs,n2),ν;kwargs...)
+		@eval $fn(Δϕ::Real,ν::Real;r_obs::Real=r_obs_default,kwargs...) = $fn(Point3D(r_obs,π/2,0),Point3D(r_obs,π/2,Δϕ),ν;kwargs...)
 		
 		C_single_freq = quote
-			function $fn(x1::Point3D,x2::Point3D,ν::Real;r_src=Rsun-75e5,kwargs...)
+			function $fn(x1::Point3D,x2::Point3D,ν::Real;r_src=r_src_default,kwargs...)
 			
 				Gfn_path_src = Gfn_path_from_source_radius(r_src)
 				@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ν_start_zeros

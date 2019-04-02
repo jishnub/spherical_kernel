@@ -52,21 +52,22 @@ function plot_traveltimes_validation(ϕ_low=40,ϕ_high=75;nϕ=5,bounce_no=1,kwar
 	ϕ2_arr .*= 180/π # convert to degrees
 
 	ax1 = subplot2grid((3,1),(0,0),rowspan=2)
-	plot(ϕ2_arr,δτ_rot2,"p-",label="Rotated frame",ms=3)
-	plot(ϕ2_arr,δτ_FB,"o",label="First Born",ms=3,ls="dashed")
-	ylabel("δτ [sec]",fontsize=12)
+	plot(ϕ2_arr,δτ_rot2,label="Rotated frame",color="black",ls="dashed")
+	plot(ϕ2_arr,δτ_FB,"^",label="First Born",ms=6,ls="None",color="black")
+	ylabel("travel time shift [sec]",fontsize=12)
 	legend(loc="best")
 	ax1[:xaxis][:set_major_formatter](ticker.NullFormatter())
 	ax1[:xaxis][:set_major_locator](ticker.MaxNLocator(5))
 
 	ax2 = subplot2grid((3,1),(2,0))
-	plot(ϕ2_arr,percentage_diff,"o-",ms=4,zorder=2)
+	plot(ϕ2_arr,percentage_diff,"o-",ms=4,zorder=2,color="black")
 	ylabel("Difference",fontsize=12)
 	xlabel("Angular separation [degrees]",fontsize=12)
 	ax2[:axhline](0,ls="dotted",color="black",zorder=0)
 	ax2[:margins](y=0.2)
 	ax2[:set_yticklabels]([(@sprintf "%.2f" x)*"%" for x in ax2[:get_yticks]()])
 	ax2[:xaxis][:set_major_locator](ticker.MaxNLocator(5))
+	ax2[:yaxis][:set_major_locator](ticker.MaxNLocator(3))
 
 	tight_layout()
 	gcf()[:subplots_adjust](hspace=0)
@@ -331,21 +332,33 @@ function plot_Ct_groups_of_modes(;t_max=6,t_min=0.3)
 	savefig("Ct_lranges.eps")
 end
 
-function plot_kernel_timing_scaling_benchmark(;s_max=10,ℓ_range=20:20:100)
+function plot_kernel_timing_scaling_benchmark(n1=Point2D(π/2,0),n2=Point2D(π/2,π/3);
+	s_max=10,ℓ_range=20:30:100)
+
 	ns = 3; chunksize = max(1,div(s_max-1,ns))
 	s_range = 1:chunksize:s_max
-	evaltime = zeros(length(s_range),length(ℓ_range))
-	for (ℓind,ℓ) in enumerate(ℓ_range),(s_ind,s) in enumerate(s_range)
-		evaltime[s_ind,ℓind] = @elapsed Main.kernel.flow_kernels_srange_t0(n1,n2,s,ℓ_range=20:ℓ);
+	evaltime = zeros(length(ℓ_range),length(s_range))
+	p = Progress(length(evaltime), 1) 
+	for (s_ind,s_max) in enumerate(s_range), (ℓind,ℓ) in enumerate(ℓ_range)
+		evaltime[ℓind,s_ind] = @elapsed Main.kernel.flow_axisymmetric_without_los(
+									n1,n2,s_max,ℓ_range=20:ℓ);
+		next!(p)
 	end
 
-	evaltime = copy(transpose(evaltime))
-	for s in s_range
-		plot(ℓ_range,evaltime[:,s],label="$s",marker="o",ms=4,ls="solid")
+	subplot(211)
+	for (s_ind,s_max) in enumerate(s_range)
+		plot(ℓ_range,evaltime[:,s_ind],label="s_max = $s_max",marker="o",ms=4,ls="solid")
 	end
-	xlabel("Maximum ℓ")
-	ylabel("Evaluation time [sec]")
-	legend(loc="best")
+	xlabel("Maximum ℓ",fontsize=12)
+	ylabel("Runtime [sec]",fontsize=12)
+	legend(loc="best",fontsize=12)
+
+	subplot(212)
+	plot(s_range,evaltime[end,:],marker="o",ms=4,ls="solid",label="ℓ = $(last(ℓ_range))")
+	xlabel("Maximum s",fontsize=12)
+	ylabel("Runtime [sec]",fontsize=12)
+
+	tight_layout()
 end
 
 function plot_h(x1,x2;kwargs...)
