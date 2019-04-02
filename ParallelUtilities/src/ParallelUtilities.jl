@@ -167,7 +167,7 @@ function pmapsum(::Type{T},f,procs_used,args...;kwargs...) where {T}
 
 	K = remotecall_fetch(x->sum(take!.(values(x))),p,node_channels)
 	
-	close.(values(node_channels))
+	finalize.(values(node_channels))
 	return K
 end
 

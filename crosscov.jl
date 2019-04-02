@@ -422,7 +422,6 @@ module crosscov
 			close.(values(Gfn_fits_files_src))
 
 			return Cℓω
-
 		end
 
 		procs_used = workers_active(ℓ_range,ν_ind_range)
@@ -456,7 +455,7 @@ module crosscov
 		
 		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dω
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
@@ -485,7 +484,7 @@ module crosscov
 					mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
 					ω_ind_full = ν_start_zeros + ω_ind 
-					ω = 2π * dν*ω_ind_full
+					ω = dω*ω_ind_full
 					
 					G = read(Gsrc_file[1],r₁_ind,:,1,1,1,mode_index)
 					α_r₁ = G[1] + im*G[2]
@@ -521,7 +520,7 @@ module crosscov
 
 		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dω
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
@@ -549,7 +548,7 @@ module crosscov
 					ℓω_index_in_file = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
 					ω_ind_full = ω_ind + ν_start_zeros
-					ω = 2π * dν*ω_ind_full
+					ω = dω*ω_ind_full
 					
 					G = read(Gsrc_file[1],r₁_ind,:,1,1,1,ℓω_index_in_file)
 					α_r₁ = G[1] + im*G[2]
@@ -658,7 +657,7 @@ module crosscov
 		
 		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dω
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
@@ -667,7 +666,8 @@ module crosscov
 
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 
-			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
+			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,
+											ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 
 			Cω_proc = zeros(ComplexF64,0:1,ν_ind_range .+ ν_start_zeros)
@@ -690,7 +690,7 @@ module crosscov
 					mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
 					ω_ind_full = ν_start_zeros + ω_ind 
-					ω = 2π * dν*ω_ind_full
+					ω = dω*ω_ind_full
 					
 					G = read(Gsrc_file[1],r₁_ind,:,1,1,1,mode_index)
 					α_r₁ = G[1] + im*G[2]
@@ -730,7 +730,7 @@ module crosscov
 		r_src = get(kwargs,:r_src,r_src_default)
 		r_obs = get(kwargs,:r_obs,r_obs_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dω
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
@@ -761,7 +761,7 @@ module crosscov
 					mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
 					ω_ind_full = ν_start_zeros + ω_ind 
-					ω = 2π * dν*ω_ind_full
+					ω = dω*ω_ind_full
 					
 					G = read(Gsrc_file[1],r_obs_ind,:,1,1,1,mode_index)
 					abs_α_robs² = G[1]^2 + G[2]^2
@@ -795,7 +795,7 @@ module crosscov
 		r_src = get(kwargs,:r_src,r_src_default)
 		r_obs = get(kwargs,:r_obs,r_obs_default)        
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dν
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs ν_start_zeros Nν dω
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
@@ -815,7 +815,8 @@ module crosscov
 
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 
-			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
+			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,
+										ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 
 			Cω_proc = zeros(ComplexF64,0:1,length(n2_arr),ν_ind_range .+ ν_start_zeros)
@@ -834,7 +835,7 @@ module crosscov
 					mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
 					ω_ind_full = ν_start_zeros + ω_ind 
-					ω = 2π * dν*ω_ind_full
+					ω = dω*ω_ind_full
 					
 					G = read(Gsrc_file[1],r_obs_ind,:,1,1,1,mode_index)
 					abs_α_robs² = G[1]^2 + G[2]^2
@@ -873,7 +874,7 @@ module crosscov
 	########################################################################################################
 
 	function Ct(x1,x2;kwargs...)
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
 
@@ -887,7 +888,7 @@ module crosscov
 	Ct(n1,n2_arr::Vector;kwargs...) = Ct(n1,n2;kwargs...)
 
 	function ∂ϕ₂Ct(x1,x2;kwargs...)
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
 
@@ -896,7 +897,7 @@ module crosscov
 	end
 
 	function ∂ϕ₂Ct(n1,n2_arr::Vector;kwargs...)
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
 
@@ -915,7 +916,7 @@ module crosscov
 		ℓ_range=nothing,r_src=Rsun-75e5,Δϕ_arr=nothing,ν_ind_range=nothing,kwargs...)
 
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
-		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs Nν ν_start_zeros dν
+		@load joinpath(Gfn_path_src,"parameters.jld2") Nν_Gfn ℓ_arr num_procs Nν ν_start_zeros dω
 
 		r₁_ind = argmin(abs.(r .- r₁))
 		r₂_ind = argmin(abs.(r .- r₂))
@@ -940,7 +941,8 @@ module crosscov
 
 		function summodes(rank)
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
-			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
+			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,
+											ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 
 			Cϕω_arr = zeros(ComplexF64,nϕ,ν_ind_range .+ ν_start_zeros)
@@ -955,7 +957,7 @@ module crosscov
 					mode_index = get_index_in_split_array(modes_in_file,(ℓ,ω_ind))
 
 					ω_ind_full = ν_start_zeros + ω_ind
-					ω = 2π * dν*ω_ind_full
+					ω = dω*ω_ind_full
 
 					G = read(Gsrc_file[1],r₁_ind,:,1,1,1,mode_index)
 					α_r₁ = G[1] + im*G[2]
@@ -968,7 +970,8 @@ module crosscov
 					end
 
 					for ϕ_ind in 1:nϕ
-						Cϕω_arr[ϕ_ind,ω_ind_full] += ω^2 * Powspec(ω) * (2ℓ+1)/4π * conj(α_r₁) * α_r₂ * Pl_cosχ[ϕ_ind,ℓ]
+						Cϕω_arr[ϕ_ind,ω_ind_full] += ω^2 * Powspec(ω) * (2ℓ+1)/4π * 
+													conj(α_r₁) * α_r₂ * Pl_cosχ[ϕ_ind,ℓ]
 					end
 
 				end
@@ -992,7 +995,7 @@ module crosscov
 
 	function CtΔϕ(r₁::Real=r_obs_default,r₂::Real=r_obs_default;τ_ind_arr=nothing,kwargs...) 
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
 
@@ -1010,7 +1013,7 @@ module crosscov
 	end
 
 	function CΔϕt(r₁::Real=r_obs_default,r₂::Real=r_obs_default;τ_ind_arr=nothing,kwargs...) 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src) 
 		@load joinpath(Gfn_path_src,"parameters.jld2") dν Nt
 
@@ -1034,7 +1037,7 @@ module crosscov
 		
 		# Return C(Δϕ,ω) = RFFT(C(Δϕ,τ)) = RFFT(IRFFT(C0(Δϕ - Ωτ,ω))(τ))
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nt dt
 
@@ -1060,7 +1063,7 @@ module crosscov
 		
 		# Return C(Δϕ,ω) = RFFT(C(Δϕ,τ)) = RFFT(IRFFT(C0(Δϕ - Ωτ,ω))(τ))
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") Nt dt
@@ -1099,20 +1102,21 @@ module crosscov
 	function δCω_uniform_rotation_firstborn_integrated_over_angle(x1::Point3D,x2::Point3D,ν::Real;
 		kwargs...)
 		
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 
 		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr
 
 		ν_test_ind = argmin(abs.(ν_arr .- ν))
 
-		δCω_uniform_rotation_firstborn_integrated_over_angle(x1,x2;ν_ind_range=ν_test_ind:ν_test_ind,kwargs...)
+		δCω_uniform_rotation_firstborn_integrated_over_angle(x1,x2;
+							ν_ind_range=ν_test_ind:ν_test_ind,kwargs...)
 	end
 
 	function δCω_uniform_rotation_firstborn_integrated_over_angle(x1::Point3D,x2::Point3D;
 		Ω_rot = 20e2/Rsun,kwargs...)
 		
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
 		Gfn_path_x2 = Gfn_path_from_source_radius(x2)
@@ -1120,7 +1124,7 @@ module crosscov
 		r₁_ind = argmin(abs.(r .- x1.r))
 		r₂_ind = argmin(abs.(r .- x2.r))
 
-		@load joinpath(Gfn_path_src,"parameters.jld2") ℓ_arr num_procs Nν_Gfn dν Nν ν_start_zeros
+		@load joinpath(Gfn_path_src,"parameters.jld2") ℓ_arr num_procs Nν_Gfn dω Nν ν_start_zeros
 
 		num_procs_obs1 = load(joinpath(Gfn_path_x1,"parameters.jld2"),"num_procs")
 		num_procs_obs2 = load(joinpath(Gfn_path_x2,"parameters.jld2"),"num_procs")
@@ -1133,8 +1137,6 @@ module crosscov
 		∂ϕ₂Pl_cosχ = dPl(cosχ(x1,x2),ℓmax=ℓmax) .*∂ϕ₂cosχ(x1,x2)
 
 		δC = zeros(ComplexF64,Nν)
-
-		dω = 2π*dν
 
 		function summodes(rank)
 			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
@@ -1229,7 +1231,7 @@ module crosscov
 		
 		# We compute δC(x1,x2) = -iΩ ∑ℓ (2ℓ+1)/4π ∂ω (ω^2 P(ω) αℓω*(r₂)αℓω(r₁))∂Δϕ Pl(cos(Δϕ))
 		
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 
 		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr dω ν_start_zeros
@@ -1289,7 +1291,7 @@ module crosscov
 	function δCt_uniform_rotation_rotatedwaves_linearapprox(x1::Point3D,x2::Point3D;
 		Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path = Gfn_path_from_source_radius(r_src)
 		@load "$Gfn_path/parameters.jld2" Nt dt
 		
@@ -1306,7 +1308,7 @@ module crosscov
 	function δCt_uniform_rotation_rotatedwaves_linearapprox(x1::Point3D,x2_arr::Vector{<:Point3D};
 		Ω_rot = 20e2/Rsun,τ_ind_arr = nothing,kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path = Gfn_path_from_source_radius(r_src)
 		@load "$Gfn_path/parameters.jld2" Nt dt
 		
@@ -1336,7 +1338,7 @@ module crosscov
 	function δCt_uniform_rotation_rotatedwaves_linearapprox(∂ϕ₂Ct_arr::Array{Float64};
 		Ω_rot = 20e2/Rsun,kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path = Gfn_path_from_source_radius(r_src)
 		@load "$Gfn_path/parameters.jld2" Nt dt
 
@@ -1436,11 +1438,11 @@ module crosscov
 			b[τ_ind_arr[idx],idx] .= 1.0
 		end
 		return b
-	end 
+	end
 
 	function ht(Cω_x1x2::Array{ComplexF64},args...;bounce_no=1,kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") ν_full Nt dt dν
 
@@ -1463,7 +1465,7 @@ module crosscov
 
 	function ht(x1,x2;kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") ν_full Nt
 
@@ -1475,7 +1477,7 @@ module crosscov
 
 	function hω(x1,x2;kwargs...)
 		
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt
 
@@ -1484,7 +1486,7 @@ module crosscov
 
 	function hω(Cω_x1x2::Array{ComplexF64},args...;kwargs...)
 		
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt
 

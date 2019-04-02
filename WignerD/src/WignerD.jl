@@ -1,7 +1,9 @@
 module WignerD
-using OffsetArrays, WignerSymbols, LinearAlgebra,Libdl
 
+using OffsetArrays, WignerSymbols, LinearAlgebra,Libdl
 using PointsOnASphere
+
+export Ylmn,Ylmatrix,djmn,djmatrix,BiPoSH_s0,BiPoSH,BSH,Jy_eigen
 
 function djmatrix(j,θ;kwargs...)
 	m_range=get(kwargs,:m_range,-j:j)
@@ -92,35 +94,32 @@ function djmatrix!(dj,j,θ::Real;kwargs...)
 	end
 end
 
-djmatrix(j,n::SphericalPoint;kwargs...) = djmatrix(j,n.θ;kwargs...)
+djmatrix(j,x::SphericalPoint;kwargs...) = djmatrix(j,x.θ;kwargs...)
 djmatrix(j,m,n,θ::Real;kwargs...) = djmatrix(j,θ,m_range=m:m,n_range=n:n;kwargs...)
-djmatrix(j,m,n,n1::SphericalPoint;kwargs...) = djmatrix(j,n1.θ,m_range=m:m,n_range=n:n;kwargs...)
+djmatrix(j,m,n,x::SphericalPoint;kwargs...) = djmatrix(j,x.θ,m_range=m:m,n_range=n:n;kwargs...)
 
-djmatrix!(dj,j,n::SphericalPoint;kwargs...) = djmatrix(dj,j,n.θ;kwargs...)
+djmatrix!(dj,j,x::SphericalPoint;kwargs...) = djmatrix(dj,j,x.θ;kwargs...)
 djmatrix!(dj,j,m,n,θ::Real;kwargs...) = djmatrix(dj,j,θ,m_range=m:m,n_range=n:n;kwargs...)
-djmatrix!(dj,j,m,n,n1::SphericalPoint;kwargs...) = djmatrix(dj,j,n1.θ,m_range=m:m,n_range=n:n;kwargs...)
+djmatrix!(dj,j,m,n,x::SphericalPoint;kwargs...) = djmatrix(dj,j,x.θ,m_range=m:m,n_range=n:n;kwargs...)
 
 function Ylmatrix(l,(θ,ϕ)::Tuple{<:Real,<:Real};kwargs...)
 
 	n_range=get(kwargs,:n_range,-1:1)
 
 	dj_θ = djmatrix(l,θ;kwargs...,n_range=n_range)
-	Y = OffsetArray{ComplexF64}(undef,axes(dj_θ)...)
+	Y = zeros(ComplexF64,axes(dj_θ)...)
 	Ylmatrix!(Y,dj_θ,l,(θ,ϕ);n_range=n_range,kwargs...,compute_d_matrix=false)
 
 	return Y
 end
 
-function Ylmatrix(dj_θ::Array{Float64,2},l,(θ,ϕ)::Tuple{<:Real,<:Real};kwargs...)
+function Ylmatrix(dj_θ,l,(θ,ϕ)::Tuple{<:Real,<:Real};kwargs...)
 
 	n_range=get(kwargs,:n_range,-1:1)
+	m_range = axes(dj_θ,1)
 
-	compute_d_matrix = get(kwargs,:compute_d_matrix,true)
-	if compute_d_matrix
-		djmatrix!(dj_θ,l,θ;kwargs...,n_range=n_range)
-	end
-	Y = OffsetArray{ComplexF64}(undef,axes(dj_θ)...)
-	Ylmatrix!(Y,dj_θ,l,(θ,ϕ);n_range=n_range,compute_d_matrix=false,kwargs...)
+	Y = zeros(ComplexF64,m_range,n_range)
+	Ylmatrix!(Y,dj_θ,l,(θ,ϕ);compute_d_matrix=false,n_range=n_range,kwargs...)
 
 	return Y
 end
@@ -130,23 +129,26 @@ function Ylmatrix!(Y,dj_θ,l,(θ,ϕ)::Tuple{<:Real,<:Real};kwargs...)
 	n_range=get(kwargs,:n_range,-1:1)
 	m_range = get(kwargs,:m_range,-l:l)
 
-	compute_d_matrix = get(kwargs,:compute_d_matrix,true)
-	if compute_d_matrix
+	if get(kwargs,:compute_d_matrix,false):: Bool
 		djmatrix!(dj_θ,l,θ;kwargs...,n_range=n_range)
 	end
 
-	@inbounds for (m,n) in Base.Iterators.product(m_range,n_range)
+	for (m,n) in Base.Iterators.product(m_range,n_range)
 		Y[m,n] = √((2l+1)/4π) * dj_θ[m,n] * cis(m*ϕ)
 	end
 end
 
-Ylmatrix(l,m,n,(θ,ϕ)::Tuple{<:Real,<:Real}) = Ylmatrix(l,(θ,ϕ),m_range=m:m,n_range=n:n)
-Ylmatrix(l,m,n,n1::SphericalPoint) = Ylmatrix(l,(n1.θ,n1.ϕ),m_range=m:m,n_range=n:n)
-Ylmatrix(l,n::SphericalPoint;kwargs...) = Ylmatrix(l,(n.θ,n.ϕ);kwargs...)
+Ylmatrix(l,m,n,(θ,ϕ)::Tuple{<:Real,<:Real};kwargs...) = Ylmatrix(l,(θ,ϕ);kwargs...,m_range=m:m,n_range=n:n)
+Ylmatrix(l,m,n,x::SphericalPoint;kwargs...) = Ylmatrix(l,(x.θ,x.ϕ);kwargs...,m_range=m:m,n_range=n:n)
+Ylmatrix(l,x::SphericalPoint;kwargs...) = Ylmatrix(l,(x.θ,x.ϕ);kwargs...)
 
-Ylmatrix!(Y,dj_θ,l,m,n,(θ,ϕ)::Tuple{<:Real,<:Real}) = Ylmatrix(Y,dj_θ,l,(θ,ϕ),m_range=m:m,n_range=n:n)
-Ylmatrix!(Y,dj_θ,l,m,n,n1::SphericalPoint) = Ylmatrix(Y,dj_θ,l,(n1.θ,n1.ϕ),m_range=m:m,n_range=n:n)
-Ylmatrix!(Y,dj_θ,l,n::SphericalPoint;kwargs...) = Ylmatrix!(Y,dj_θ,l,(n.θ,n.ϕ);kwargs...)
+Ylmatrix!(Y,dj_θ,l,m,n,(θ,ϕ)::Tuple{<:Real,<:Real};kwargs...) = Ylmatrix(Y,dj_θ,l,(θ,ϕ);kwargs...,m_range=m:m,n_range=n:n)
+Ylmatrix!(Y,dj_θ,l,m,n,x::SphericalPoint;kwargs...) = Ylmatrix(Y,dj_θ,l,(x.θ,x.ϕ);kwargs...,m_range=m:m,n_range=n:n)
+Ylmatrix!(Y,dj_θ,l,x::SphericalPoint;kwargs...) = Ylmatrix!(Y,dj_θ,l,(x.θ,x.ϕ);kwargs...)
+
+Ylmatrix(dj_θ,l,m,n,(θ,ϕ)::Tuple{<:Real,<:Real};kwargs...) = Ylmatrix(dj_θ,l,(θ,ϕ);kwargs...,m_range=m:m,n_range=n:n)
+Ylmatrix(dj_θ,l,m,n,x::SphericalPoint;kwargs...) = Ylmatrix(dj_θ,l,(x.θ,x.ϕ);kwargs...,m_range=m:m,n_range=n:n)
+Ylmatrix(dj_θ,l,x::SphericalPoint;kwargs...) = Ylmatrix(dj_θ,l,(x.θ,x.ϕ);kwargs...)
 
 X(j,n) = sqrt((j+n)*(j-n+1))
 
@@ -301,10 +303,10 @@ function BiPoSH_s0(ℓ₁,ℓ₂,s_range::AbstractRange,
 end
 
 BiPoSH_s0(ℓ₁,ℓ₂,s,β::Integer,γ::Integer,
-	n1::SphericalPoint,n2::SphericalPoint;kwargs...) = BiPoSH_s0(ℓ₁,ℓ₂,s,β,γ,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ);kwargs...)
+	x::SphericalPoint,x2::SphericalPoint;kwargs...) = BiPoSH_s0(ℓ₁,ℓ₂,s,β,γ,(x.θ,x.ϕ),(x2.θ,x2.ϕ);kwargs...)
 
 BiPoSH_s0(ℓ₁,ℓ₂,s,
-	n1::SphericalPoint,n2::SphericalPoint;kwargs...) = BiPoSH_s0(ℓ₁,ℓ₂,s,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ);kwargs...)
+	x::SphericalPoint,x2::SphericalPoint;kwargs...) = BiPoSH_s0(ℓ₁,ℓ₂,s,(x.θ,x.ϕ),(x2.θ,x2.ϕ);kwargs...)
 
 # Any t
 
@@ -450,10 +452,10 @@ function BiPoSH(ℓ₁,ℓ₂,s_range::AbstractRange,(θ₁,ϕ₁)::Tuple{<:Real
 	return Y_BSH
 end
 
-BiPoSH(ℓ₁,ℓ₂,s,t,β::Integer,γ::Integer,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH(ℓ₁,ℓ₂,s,t,β,γ,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
-BiPoSH(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH(ℓ₁,ℓ₂,s_range,β,γ,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
-BiPoSH(ℓ₁,ℓ₂,s,t,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH(ℓ₁,ℓ₂,s,t,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
-BiPoSH(ℓ₁,ℓ₂,s_range::AbstractRange,n1::SphericalPoint,n2::SphericalPoint) = BiPoSH(ℓ₁,ℓ₂,s_range,(n1.θ,n1.ϕ),(n2.θ,n2.ϕ))
+BiPoSH(ℓ₁,ℓ₂,s,t,β::Integer,γ::Integer,x::SphericalPoint,x2::SphericalPoint) = BiPoSH(ℓ₁,ℓ₂,s,t,β,γ,(x.θ,x.ϕ),(x2.θ,x2.ϕ))
+BiPoSH(ℓ₁,ℓ₂,s_range::AbstractRange,β::Integer,γ::Integer,x::SphericalPoint,x2::SphericalPoint) = BiPoSH(ℓ₁,ℓ₂,s_range,β,γ,(x.θ,x.ϕ),(x2.θ,x2.ϕ))
+BiPoSH(ℓ₁,ℓ₂,s,t,x::SphericalPoint,x2::SphericalPoint) = BiPoSH(ℓ₁,ℓ₂,s,t,(x.θ,x.ϕ),(x2.θ,x2.ϕ))
+BiPoSH(ℓ₁,ℓ₂,s_range::AbstractRange,x::SphericalPoint,x2::SphericalPoint) = BiPoSH(ℓ₁,ℓ₂,s_range,(x.θ,x.ϕ),(x2.θ,x2.ϕ))
 
 
 ##################################################################################################
@@ -547,7 +549,6 @@ function CG_ℓ₁mℓ₂nst(ℓ₁,m,ℓ₂,t=0;wig3j_fn_ptr=nothing)
 	return CG
 end
 
-export Ylmn,Ylmatrix,djmn,djmatrix,BiPoSH_s0,BiPoSH,BSH
 include("./precompile.jl")
 
 end

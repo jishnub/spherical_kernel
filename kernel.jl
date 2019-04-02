@@ -11,7 +11,7 @@ module kernel
 	# @pyimport scipy.integrate as integrate
 	import WignerSymbols: clebschgordan
 	using WignerD, FileIO
-	export kernel_uniform_rotation_uplus,flow_axisymmetric_srange,
+	export kernel_uniform_rotation_uplus,flow_axisymmetric_without_los,
 			meridional_flow_ψ_srange
 
 	################################################################################################################
@@ -20,7 +20,7 @@ module kernel
 
 	function kernel_uniform_rotation_uplus(x1::Point3D,x2::Point3D;kwargs...)
 		
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
@@ -47,7 +47,7 @@ module kernel
 
 			∂ϕ₂Pl_cosχ = dPl(cosχ(x1,x2),ℓmax=ℓ_arr[end]).*∂ϕ₂cosχ(x1,x2)
 
-			K = zeros(nr)
+			K = zeros(nr,-1:-1,1:1)
 
 			δG_r₁_rsrc = zeros(ComplexF64,nr) # This is not actually δG, it's just a radial function dependent on f
 
@@ -108,7 +108,7 @@ module kernel
 					    @. δG_r₂_rsrc = δG_r₁_rsrc
 					end
 
-					@. K +=  dω/2π * ω^3 * Powspec(ω) * (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * imag(h_ω[ω_ind]) * 
+					@. K[:,-1,1] +=  dω/2π * ω^3 * Powspec(ω) * (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * imag(h_ω[ω_ind]) * 
 								(conj(δG_r₁_rsrc)*G_r₂_rsrc + conj(G_r₁_rsrc)*δG_r₂_rsrc) 
 
 				end
@@ -124,18 +124,19 @@ module kernel
 		procs_used = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs_used)
 
-		pmapsum(Vector{Float64},summodes,procs_used)
+		T = OffsetArray{Float64,3,Array{Float64,3}}
+		pmapsum(T,summodes,procs_used)
 	end
 
 	function kernel_uniform_rotation_uplus(n1::Point2D,n2::Point2D;kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
-		r_obs = get(kwargs,:r_obs,r_obs_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
+		r_obs = get(kwargs,:r_obs,r_obs_default)
 
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_obs = Gfn_path_from_source_radius(r_obs)
 
-		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs dν dω ν_start_zeros Nν_Gfn
+		@load joinpath(Gfn_path_src,"parameters.jld2") ν_arr ℓ_arr num_procs dω ν_start_zeros Nν_Gfn
 
 		num_procs_obs = load(joinpath(Gfn_path_obs,"parameters.jld2"),"num_procs")
 
@@ -163,7 +164,7 @@ module kernel
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 			Gfn_fits_files_obs = Gfn_fits_files(Gfn_path_obs,proc_id_range_Gobs)
 
-			K = zeros(nr)
+			K = zeros(nr,-1:-1,1:1)
 
 			δG_robs_rsrc = zeros(ComplexF64,nr) # This is not actually δG, it's just a radial function dependent on f
 
@@ -202,7 +203,7 @@ module kernel
 		    						(ℓ*(ℓ+1)-1) * Gsrc[:,1]/Ω(ℓ,0) * Gobs[:,1]/Ω(ℓ,0)
 
 
-					@. K +=  dω/2π * ω^3 * Powspec(ω) * 
+					@. K[:,-1,1] +=  dω/2π * ω^3 * Powspec(ω) * 
 							(2ℓ+1)/4π * ∂ϕ₂Pl_cosχ[ℓ] * imag(h_ω[ω_ind]) * 
 								2real(conj(δG_robs_rsrc)*G_robs_rsrc) 
 
@@ -220,15 +221,16 @@ module kernel
 		procs_used = workers_active(ℓ_range,ν_ind_range)
 		num_workers = length(procs_used)
 
-		pmapsum(Vector{Float64},summodes,procs_used)
+		T = OffsetArray{Float64,3,Array{Float64,3}}
+		pmapsum(T,summodes,procs_used)
 	end
 	
 	function kernel_uniform_rotation_uplus(n1::Point2D,n2_arr::Vector{<:Point2D};
 		Cω_arr=Array{Nothing,2}(undef,1,length(n2_arr)),
 		hω_arr=nothing,kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
-		r_obs = get(kwargs,:r_obs,r_obs_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
+		r_obs = get(kwargs,:r_obs,r_obs_default)
 
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_obs = Gfn_path_from_source_radius(r_obs)
@@ -251,7 +253,7 @@ module kernel
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 			Gfn_fits_files_obs = Gfn_fits_files(Gfn_path_obs,proc_id_range_Gobs)
 
-			K = zeros(nr,length(n2_arr))
+			K = zeros(nr,-1:-1,1:1,length(n2_arr))
 
 			δG_robs_rsrc = zeros(ComplexF64,nr) # This is not actually δG, it's just a radial function dependent on f
 
@@ -296,7 +298,7 @@ module kernel
 		    		@. fr = dω/2π * ω^3 * Powspec(ω) * 2real(conj(δG_robs_rsrc)*G_robs_rsrc) 
 
 					for n2ind in 1:length(n2_arr)
-						@. K[:,n2ind] +=   fr * (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ_arr[n2ind,ℓ] * 
+						@. K[:,-1,1,n2ind] +=   fr * (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ_arr[n2ind,ℓ] * 
 											imag(hω_arr[n2ind,ω_ind])
 					end
 					
@@ -339,9 +341,10 @@ module kernel
 
 		prog_bar = Progress(num_workers,1,"First born travel times : ")
 
-		K₊ = zeros(Float64,nr,length(n2_arr))
+		K₊ = zeros(Float64,nr,-1:-1,1:1,length(n2_arr))
 		@sync begin
-			@async K₊ .= pmapsum(Array{Float64,2},summodes,procs_used)
+			T = OffsetArray{Float64,4,Array{Float64,4}}
+			@async K₊ .= pmapsum(T,summodes,procs_used)
 			@async for n in 1:num_workers
 				take!(tracker)
 				next!(prog_bar)
@@ -357,10 +360,58 @@ module kernel
 	
 	Nℓ′ℓs(ℓ′,ℓ,s) = √((2ℓ+1)*(2ℓ′+1)/(4π*(2s+1)))
 
-	function flow_axisymmetric_srange(x1::Point3D,x2::Point3D,s_max;
+	function compute_Yℓmatrix_twopoints(ℓ,x1::SphericalPoint,x2::SphericalPoint;n_range=-1:1)
+
+		λ,v = Jy_eigen(ℓ)
+		dℓ = djmatrix(ℓ,x1,n_range=n_range,λ=λ,v=v)
+		Y1 = Ylmatrix(dℓ,ℓ,x1,n_range=n_range,compute_d_matrix=false)
+		if x1.θ == x2.θ
+			# Reuse d matrix computed at the previous step
+			Y2 = Ylmatrix(dℓ,ℓ,x2,n_range=n_range,compute_d_matrix=false)
+		else
+			# Need to recompute the d matrix, use the eigenvectors computed above
+			Y2 = Ylmatrix(dℓ,ℓ,x2,n_range=n_range,λ=λ,v=v,compute_d_matrix=true)
+		end
+		return Y1,Y2
+	end
+
+	function update_Yℓ′_arrays!(Yℓ′_n1_arr,Yℓ′_n2_arr,x1,x2,ℓ,ℓ_prev,ℓ_start,ℓ′_range;n_range=-1:1)
+
+		ℓ′_last = last(ℓ′_range)
+		ℓ′_first = first(ℓ′_range)
+
+		if ℓ != ℓ_start && ℓ == ℓ_prev
+			# re-use previously computed arrays
+			# nothing to do here
+		elseif ℓ - ℓ_prev == 1
+    		# roll the Yℓ′ arrays
+    		for ind in ℓ′_first-ℓ:ℓ′_last-ℓ-1
+    			@. Yℓ′_n1_arr[ind] = Yℓ′_n1_arr[ind+1]
+    		end
+
+    		for ind in ℓ′_first-ℓ:ℓ′_last-ℓ-1
+    			@. Yℓ′_n2_arr[ind] = Yℓ′_n2_arr[ind+1]
+    		end
+
+    		# compute the last element which is new
+
+    		Y1,Y2 = compute_Yℓmatrix_twopoints(ℓ′_last,x1,x2,n_range=n_range)
+			Yℓ′_n1_arr[ℓ′_last-ℓ][axes(Y1)...] = Y1
+    		Yℓ′_n2_arr[ℓ′_last-ℓ][axes(Y2)...] = Y2
+    	else
+    		# re-initialize the Yℓ′ arrays
+    		for ℓ′ in ℓ′_range
+    			Y1,Y2 = compute_Yℓmatrix_twopoints(ℓ′,x1,x2,n_range=n_range)
+    			Yℓ′_n1_arr[ℓ′-ℓ][axes(Y1)...] = Y1
+    			Yℓ′_n2_arr[ℓ′-ℓ][axes(Y2)...] = Y2
+    		end
+    	end
+	end
+
+	function flow_axisymmetric_without_los(x1::Point3D,x2::Point3D,s_max;
 		K_components=-1:1,kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_x1 = Gfn_path_from_source_radius(x1)
 		Gfn_path_x2 = Gfn_path_from_source_radius(x2)
@@ -499,32 +550,35 @@ module kernel
 		    		Yℓ_n2 = Ylmatrix(ℓ,x2,n_range=0:0)
 		    		Yℓ_n1 = Ylmatrix(ℓ,x1,n_range=0:0)
 
-		    		if ℓ != first_mode[1] && ℓ == ℓ_prev
-		    			# re-use previously computed arrays
-		    			# nothing to do here
-		    		elseif ℓ - ℓ_prev == 1
-			    		# roll the Yℓ′ arrays
-			    		for ind in first(ℓ′_range)-ℓ:last(ℓ′_range)-ℓ-1
-			    			@. Yℓ′_n1_arr[ind] = Yℓ′_n1_arr[ind+1]
-			    		end
+		    		update_Yℓ′_arrays!(Yℓ′_n1_arr,Yℓ′_n2_arr,x1,x2,
+							ℓ,ℓ_prev,first_mode[1],ℓ′_range,n_range=0:0)
 
-			    		for ind in first(ℓ′_range)-ℓ:last(ℓ′_range)-ℓ-1
-			    			@. Yℓ′_n2_arr[ind] = Yℓ′_n2_arr[ind+1]
-			    		end
+		    		# if ℓ != first_mode[1] && ℓ == ℓ_prev
+		    		# 	# re-use previously computed arrays
+		    		# 	# nothing to do here
+		    		# elseif ℓ - ℓ_prev == 1
+			    	# 	# roll the Yℓ′ arrays
+			    	# 	for ind in first(ℓ′_range)-ℓ:last(ℓ′_range)-ℓ-1
+			    	# 		@. Yℓ′_n1_arr[ind] = Yℓ′_n1_arr[ind+1]
+			    	# 	end
 
-			    		Y = Ylmatrix(last(ℓ′_range),x1,n_range=0:0)
-		    			Yℓ′_n1_arr[last(ℓ′_range)-ℓ][axes(Y)...] = Y
-			    		Y = Ylmatrix(last(ℓ′_range),x2,n_range=0:0)
-			    		Yℓ′_n2_arr[last(ℓ′_range)-ℓ][axes(Y)...] = Y
-			    	else
-			    		# re-initialize the Yℓ′ arrays
-			    		for ℓ′ in ℓ′_range
-			    			Y = Ylmatrix(ℓ′,x1,n_range=0:0)
-			    			Yℓ′_n1_arr[ℓ′-ℓ][axes(Y)...] = Y
-			    			Y = Ylmatrix(ℓ′,x2,n_range=0:0)
-			    			Yℓ′_n2_arr[ℓ′-ℓ][axes(Y)...] = Y
-			    		end
-			    	end
+			    	# 	for ind in first(ℓ′_range)-ℓ:last(ℓ′_range)-ℓ-1
+			    	# 		@. Yℓ′_n2_arr[ind] = Yℓ′_n2_arr[ind+1]
+			    	# 	end
+
+			    	# 	Y = Ylmatrix(last(ℓ′_range),x1,n_range=0:0)
+		    		# 	Yℓ′_n1_arr[last(ℓ′_range)-ℓ][axes(Y)...] = Y
+			    	# 	Y = Ylmatrix(last(ℓ′_range),x2,n_range=0:0)
+			    	# 	Yℓ′_n2_arr[last(ℓ′_range)-ℓ][axes(Y)...] = Y
+			    	# else
+			    	# 	# re-initialize the Yℓ′ arrays
+			    	# 	for ℓ′ in ℓ′_range
+			    	# 		Y = Ylmatrix(ℓ′,x1,n_range=0:0)
+			    	# 		Yℓ′_n1_arr[ℓ′-ℓ][axes(Y)...] = Y
+			    	# 		Y = Ylmatrix(ℓ′,x2,n_range=0:0)
+			    	# 		Yℓ′_n2_arr[ℓ′-ℓ][axes(Y)...] = Y
+			    	# 	end
+			    	# end
 
 			    	ℓ_prev=ℓ
 
@@ -670,11 +724,11 @@ module kernel
 		return pmapsum(T,summodes,procs_used)
 	end
 
-	function flow_axisymmetric_srange(n1::Point2D,n2::Point2D,s_max;
+	function flow_axisymmetric_without_los(n1::Point2D,n2::Point2D,s_max;
 		K_components=-1:1,kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
-		r_obs = get(kwargs,:r_obs,r_obs_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
+		r_obs = get(kwargs,:r_obs,r_obs_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		Gfn_path_obs = Gfn_path_from_source_radius(r_obs)
 
@@ -790,33 +844,36 @@ module kernel
 		 	   		# Precompute Ylmatrix to speed up evaluation of BiPoSH_s0
 		 	   		Yℓ_n2 = Ylmatrix(ℓ,n2,n_range=0:0)
 		 	   		Yℓ_n1 = Ylmatrix(ℓ,n1,n_range=0:0)    
+
+		 	   		update_Yℓ′_arrays!(Yℓ′_n1_arr,Yℓ′_n2_arr,n1,n2,
+							ℓ,ℓ_prev,first_mode[1],ℓ′_range,n_range=0:0)
 	
-					if ℓ != first_mode[1] && ℓ == ℓ_prev
-		    			# re-use previously computed arrays
-		    			# nothing to do here
-		 	   		elseif (ℓ - ℓ_prev) == 1
-			    		# roll the Yℓ′ arrays
-			    		for ind in first(ℓ′_range)-ℓ:last(ℓ′_range)-ℓ-1
-			    			@. Yℓ′_n1_arr[ind] = Yℓ′_n1_arr[ind+1]
-			    		end
+					# if ℓ != first_mode[1] && ℓ == ℓ_prev
+		   #  			# re-use previously computed arrays
+		   #  			# nothing to do here
+		 	 #   		elseif (ℓ - ℓ_prev) == 1
+			  #   		# roll the Yℓ′ arrays
+			  #   		for ind in first(ℓ′_range)-ℓ:last(ℓ′_range)-ℓ-1
+			  #   			@. Yℓ′_n1_arr[ind] = Yℓ′_n1_arr[ind+1]
+			  #   		end
 
-			    		for ind in first(ℓ′_range)-ℓ:last(ℓ′_range)-ℓ-1
-			    			@. Yℓ′_n2_arr[ind] = Yℓ′_n2_arr[ind+1]
-			    		end
+			  #   		for ind in first(ℓ′_range)-ℓ:last(ℓ′_range)-ℓ-1
+			  #   			@. Yℓ′_n2_arr[ind] = Yℓ′_n2_arr[ind+1]
+			  #   		end
 
-			    		Y = Ylmatrix(last(ℓ′_range),n1,n_range=0:0)
-		 	   			Yℓ′_n1_arr[last(ℓ′_range)-ℓ][axes(Y)...] = Y
-			    		Y = Ylmatrix(last(ℓ′_range),n2,n_range=0:0)
-			    		Yℓ′_n2_arr[last(ℓ′_range)-ℓ][axes(Y)...] = Y
-			    	else
-			    		# re-initialize the Yℓ′ arrays
-			    		for ℓ′ in ℓ′_range
-			    			Y = Ylmatrix(ℓ′,n1,n_range=0:0)
-			    			Yℓ′_n1_arr[ℓ′-ℓ][axes(Y)...] = Y
-			    			Y = Ylmatrix(ℓ′,n2,n_range=0:0)
-			    			Yℓ′_n2_arr[ℓ′-ℓ][axes(Y)...] = Y
-			    		end
-			    	end
+			  #   		Y = Ylmatrix(last(ℓ′_range),n1,n_range=0:0)
+		 	 #   			Yℓ′_n1_arr[last(ℓ′_range)-ℓ][axes(Y)...] = Y
+			  #   		Y = Ylmatrix(last(ℓ′_range),n2,n_range=0:0)
+			  #   		Yℓ′_n2_arr[last(ℓ′_range)-ℓ][axes(Y)...] = Y
+			  #   	else
+			  #   		# re-initialize the Yℓ′ arrays
+			  #   		for ℓ′ in ℓ′_range
+			  #   			Y = Ylmatrix(ℓ′,n1,n_range=0:0)
+			  #   			Yℓ′_n1_arr[ℓ′-ℓ][axes(Y)...] = Y
+			  #   			Y = Ylmatrix(ℓ′,n2,n_range=0:0)
+			  #   			Yℓ′_n2_arr[ℓ′-ℓ][axes(Y)...] = Y
+			  #   		end
+			  #   	end
 
 			    	ℓ_prev=ℓ
 
@@ -945,7 +1002,7 @@ module kernel
 	end
 
 	function meridional_flow_ψ_srange(x1,x2,s_max;kwargs...)
-		Kv = flow_kernels_srange_t0(x1,x2,s_max;K_components=0:1,kwargs...)
+		Kv = flow_axisymmetric_without_los(x1,x2,s_max;K_components=0:1,kwargs...)
 
 		Kψ_imag = zeros(nr,1:s_max)
 
@@ -971,7 +1028,7 @@ module traveltimes
 	end
 
 	function δτ_uniform_rotation_firstborn_int_hω_δCω(n1,n2;Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dω ν_start_zeros Nν_Gfn
 
@@ -990,7 +1047,7 @@ module traveltimes
 	function δτ_uniform_rotation_rotatedframe_int_hω_δCω_linearapprox(n1::Point2D,n2::Point2D;
 		Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dω ν_start_zeros Nν_Gfn
 
@@ -1009,7 +1066,7 @@ module traveltimes
 	function δτ_uniform_rotation_rotatedframe_int_ht_δCt(n1::Point2D,n2::Point2D;
 		Ω_rot=20e2/Rsun,bounce_no=1,kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt Nt dν
 
@@ -1030,7 +1087,7 @@ module traveltimes
 	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2::Point2D;
 		Ω_rot=20e2/Rsun,bounce_no=1,τ_ind_arr=nothing,kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν Nt
 
@@ -1062,7 +1119,7 @@ module traveltimes
 	function δτ_uniform_rotation_rotatedframe_int_ht_δCt_linearapprox(n1::Point2D,n2_arr::Vector{<:Point2D};
 		Ω_rot=20e2/Rsun,bounce_no=1,τ_ind_arr=nothing,kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν Nt
 
@@ -1092,7 +1149,7 @@ module traveltimes
 
 	function traveltimes_validate(n1,n2;kwargs...)
 
-		r_src = get(kwargs,:r_src,r_src_default) :: Float64
+		r_src = get(kwargs,:r_src,r_src_default)
 		Gfn_path_src = Gfn_path_from_source_radius(r_src)
 		@load joinpath(Gfn_path_src,"parameters.jld2") dt dν
 
@@ -1122,7 +1179,7 @@ module kernel3D
 
 	function flow_longitudinal_slice(x1,x2,s_max;kwargs...)
 		
-		K′jl0_r = flow_axisymmetric_srange(x1,x2,s_max;kwargs...)
+		K′jl0_r = flow_axisymmetric_without_los(x1,x2,s_max;kwargs...)
 		Kjl0_r = similar(K′jl0_r)
 
 		@. Kjl0_r[:,0,:] = K′jl0_r[:,0,:]
@@ -1157,7 +1214,7 @@ module kernel3D
 
 	function flow_latitudinal_slice(x1,x2,s_max;kwargs...)
 		
-		K′jl0_r = flow_axisymmetric_srange(x1,x2,s_max;kwargs...)
+		K′jl0_r = flow_axisymmetric_without_los(x1,x2,s_max;kwargs...)
 		Kjl0_r = similar(K′jl0_r)
 
 		@. Kjl0_r[:,0,:] = K′jl0_r[:,0,:]
