@@ -224,7 +224,7 @@ module kernel
 	end
 	
 	function kernel_uniform_rotation_uplus(n1::Point2D,n2_arr::Vector{<:Point2D};
-		kwargs...)
+		hω_arr=nothing,kwargs...)
 
 		r_src = get(kwargs,:r_src,r_src_default)
 		r_obs = get(kwargs,:r_obs,r_obs_default)
@@ -247,15 +247,14 @@ module kernel
 		end
 		∂ϕ₂Pl_cosχ_arr = copy(transpose(∂ϕ₂Pl_cosχ_arr))
 		
-		hω_arr = get(kwargs,:hω_arr,nothing)
-		if isnothing(hω_arr)
+		if  isnothing(hω_arr)
 			hω_arr = zeros(ComplexF64,ν_ind_range,length(n2_arr))
 			τ_ind_arr = get(kwargs,:τ_ind_arr,[nothing for i in n2_arr])
 			Cω_arr=get(kwargs,:Cω_arr,Array{Nothing,2}(undef,1,length(n2_arr)))
-
 			for (n2ind,n2) in enumerate(n2_arr)
 				hω_arr[ν_ind_range,n2ind] = hω(Cω_arr[:,n2ind],n1,n2;
-				τ_ind_arr=τ_ind_arr[n2ind],kwargs...)[ν_start_zeros .+ ν_ind_range]
+				τ_ind_arr=τ_ind_arr[n2ind],
+				r_src=r_src,r_obs=r_obs,kwargs...)[ν_start_zeros .+ ν_ind_range]
 			end
 			hω_arr = copy(transpose(hω_arr))
 		else
@@ -319,6 +318,8 @@ module kernel
 						@. K[:,n2ind] +=   fr * (2ℓ+1)/4π * ∂ϕ₂Pl_cosχ_arr[n2ind,ℓ] * 
 											imag(hω_arr[n2ind,ω_ind])
 					end
+					
+
 				end
 			end
 
@@ -342,10 +343,9 @@ module kernel
 	
 	Nℓ′ℓs(ℓ′,ℓ,s) = √((2ℓ+1)*(2ℓ′+1)/(4π*(2s+1)))
 
-	function compute_Yℓmatrix_twopoints(ℓ,x1::SphericalPoint,x2::SphericalPoint;n_range=-1:1,v_dict)
+	function compute_Yℓmatrix_twopoints(ℓ,x1::SphericalPoint,x2::SphericalPoint;n_range=-1:1)
 
-		λ,v = read_or_compute_Jy_eigen(v_dict,ℓ)
-
+		λ,v = Jy_eigen(ℓ)
 		dℓ = djmatrix(ℓ,x1,n_range=n_range,λ=λ,v=v)
 		Y1 = Ylmatrix(dℓ,ℓ,x1,n_range=n_range,compute_d_matrix=false)
 		if x1.θ == x2.θ
@@ -358,9 +358,7 @@ module kernel
 		return Y1,Y2
 	end
 
-	function update_Yℓ′_arrays!(Yℓ′_n1_arr,Yℓ′_n2_arr,x1,x2,
-		ℓ,ℓ_prev,ℓ_start,ℓ′_range;
-		n_range=-1:1,v_dict=nothing)
+	function update_Yℓ′_arrays!(Yℓ′_n1_arr,Yℓ′_n2_arr,x1,x2,ℓ,ℓ_prev,ℓ_start,ℓ′_range;n_range=-1:1)
 
 		ℓ′_last = last(ℓ′_range)
 		ℓ′_first = first(ℓ′_range)
@@ -380,61 +378,17 @@ module kernel
 
     		# compute the last element which is new
 
-    		Y1,Y2 = compute_Yℓmatrix_twopoints(ℓ′_last,x1,x2,n_range=n_range,v_dict=v_dict)
+    		Y1,Y2 = compute_Yℓmatrix_twopoints(ℓ′_last,x1,x2,n_range=n_range)
 			Yℓ′_n1_arr[ℓ′_last-ℓ][axes(Y1)...] = Y1
     		Yℓ′_n2_arr[ℓ′_last-ℓ][axes(Y2)...] = Y2
     	else
     		# re-initialize the Yℓ′ arrays
     		for ℓ′ in ℓ′_range
-    			Y1,Y2 = compute_Yℓmatrix_twopoints(ℓ′,x1,x2,n_range=n_range,v_dict=v_dict)
+    			Y1,Y2 = compute_Yℓmatrix_twopoints(ℓ′,x1,x2,n_range=n_range)
     			Yℓ′_n1_arr[ℓ′-ℓ][axes(Y1)...] = Y1
     			Yℓ′_n2_arr[ℓ′-ℓ][axes(Y2)...] = Y2
     		end
     	end
-	end
-
-	function compute_BiPoSH_without_los(Y12,Y21,x1,x2,ℓ,ℓ′,s_max;
-		Yℓ_n1=nothing,Yℓ_n2=nothing,Yℓ′_n1=nothing,Yℓ′_n2=nothing)
-
-		# ignore line-of-sight projection, just the β=γ=0 component
-    	# check if (ℓ′,ℓ) has already been computed
-    	# We can use the fact that Yℓ′ℓs0(n2,n1) = (-1)^(ℓ+ℓ′+s)Yℓℓ′s0(n1,n2)
-    	# If we have computed Yℓℓ′s0(n1,n2) already in the previous step,
-		# then we can simply read it in from the dictionary
-
-		if haskey(Y12,(ℓ′,ℓ))
-    		Yℓ′ℓ_s0_n1n2 = Y12[(ℓ′,ℓ)]
-    	elseif haskey(Y21,(ℓ,ℓ′))
-    		Yℓ′ℓ_s0_n1n2 = Y21[(ℓ,ℓ′)] .* ((-1)^(ℓ+ℓ′+s) for s in axes(Y21[(ℓ,ℓ′)],1))
-    	else
-    		# compute and store it
-    		Yℓ′ℓ_s0_n1n2 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,x1,x2,
-    						Y_ℓ₁=Yℓ′_n1,Y_ℓ₂=Yℓ_n2)
-    		Y12[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n1n2
-    	end
-    	
-    	if haskey(Y21,(ℓ′,ℓ))
-    		Yℓ′ℓ_s0_n2n1 = Y21[(ℓ′,ℓ)]
-    	elseif haskey(Y12,(ℓ,ℓ′))
-    		Yℓ′ℓ_s0_n2n1 = Y12[(ℓ,ℓ′)].* ((-1)^(ℓ+ℓ′+s) for s in axes(Y12[(ℓ,ℓ′)],1))
-    	else
-    		Yℓ′ℓ_s0_n2n1 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,x2,x1,
-    						Y_ℓ₁=Yℓ′_n2,Y_ℓ₂=Yℓ_n1)
-    		Y21[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n2n1
-    	end
-
-    	return Yℓ′ℓ_s0_n1n2,Yℓ′ℓ_s0_n2n1
-	end
-
-	function read_or_compute_Jy_eigen(v_dict,ℓ)
-		if !isnothing(v_dict) && haskey(v_dict,ℓ)
-   			v = v_dict[ℓ]
-   			λ = Float64.(-ℓ:ℓ)
-   		else
-   			λ,v = Jy_eigen(ℓ)
-   			v_dict[ℓ] = v
-   		end
-   		return λ,v
 	end
 
 	function flow_axisymmetric_without_los(x1::Point3D,x2::Point3D,s_max;
@@ -485,10 +439,10 @@ module kernel
 									(ℓ′_max_last_mode,last_mode[2]),num_procs_x1)
 			
 			proc_id_min_G_x2 = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
-									(ℓ′_min_first_mode,first_mode[2]),num_procs_x2)
-			proc_id_max_G_x2 = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
+                                  	(ℓ′_min_first_mode,first_mode[2]),num_procs_x2)
+           	proc_id_max_G_x2 = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
 									(ℓ′_max_last_mode,last_mode[2]),num_procs_x2)
-			
+
 			Gfn_fits_files_obs1 = Gfn_fits_files(Gfn_path_x1,proc_id_min_G_x1:proc_id_max_G_x1)
 			Gfn_fits_files_obs2 = Gfn_fits_files(Gfn_path_x2,proc_id_min_G_x2:proc_id_max_G_x2)
 
@@ -500,11 +454,12 @@ module kernel
 			G_x2 = zeros(ComplexF64,nr,0:1)
 
 			# temporary array to precompute the radial part, indices are (r,η)
-			# the η=-1 and η=1 terms are identical for α=0
-			f_radial_r₁ = OffsetArray([zeros(ComplexF64,nr,0:1),zeros(ComplexF64,nr,-1:1)],0:1)
+			f_radial_0_r₁ = zeros(ComplexF64,nr,0:1) # the η=-1 and η=1 terms are identical
+			f_radial_1_r₁ = zeros(ComplexF64,nr,-1:1)
 			fℓ′ℓsω_r₁ = zeros(ComplexF64,nr,0:1)
 
-			f_radial_r₂ = OffsetArray([zeros(ComplexF64,nr,0:1),zeros(ComplexF64,nr,-1:1)],0:1)
+			f_radial_0_r₂ = zeros(ComplexF64,nr,0:1) # the η=-1 and η=1 terms are identical
+			f_radial_1_r₂ = zeros(ComplexF64,nr,-1:1)
 			fℓ′ℓsω_r₂ = zeros(ComplexF64,nr,0:1)
 
 			# Clebsch Gordan coefficients, indices are (s,η,t)
@@ -529,8 +484,6 @@ module kernel
 			# Cache bipolar spherical harmonics in a dict on each worker
 			Y12 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
 			Y21 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
-
-			v_dict = Dict{Int64,OffsetArray{ComplexF64,2,Array{ComplexF64,2}}}()
 
 			# keep track of ℓ to cache Yℓ′ by rolling arrays
 			# if ℓ changes by 1 arrays can be rolled
@@ -573,22 +526,42 @@ module kernel
 		    		ℓ′_range = intersect(ℓ_arr,abs(ℓ-s_max):ℓ+s_max)
 
 		    		# Precompute Ylmatrix to speed up evaluation of BiPoSH_s0
-		    		λ,v = read_or_compute_Jy_eigen(v_dict,ℓ)
-		    		Yℓ_n2 = Ylmatrix(ℓ,x2,n_range=0:0,λ=λ,v=v)
-		    		Yℓ_n1 = Ylmatrix(ℓ,x1,n_range=0:0,λ=λ,v=v)
+		    		Yℓ_n2 = Ylmatrix(ℓ,x2,n_range=0:0)
+		    		Yℓ_n1 = Ylmatrix(ℓ,x1,n_range=0:0)
 
 		    		update_Yℓ′_arrays!(Yℓ′_n1_arr,Yℓ′_n2_arr,x1,x2,
-							ℓ,ℓ_prev,first_mode[1],ℓ′_range,n_range=0:0,v_dict=v_dict)
+							ℓ,ℓ_prev,first_mode[1],ℓ′_range,n_range=0:0)
 
 			    	ℓ_prev=ℓ
 
 				    for ℓ′ in ℓ′_range
 
-				    	Yℓ′ℓ_s0_n1n2,Yℓ′ℓ_s0_n2n1 = compute_BiPoSH_without_los(
-				    								Y12,Y21,x1,x2,ℓ,ℓ′,s_max;
-				    								Yℓ_n1=Yℓ_n1,Yℓ_n2=Yℓ_n2,
-				    								Yℓ′_n1=Yℓ′_n1_arr[ℓ′-ℓ],
-				    								Yℓ′_n2=Yℓ′_n2_arr[ℓ′-ℓ])
+				    	# ignore line-of-sight projection, just the β=γ=0 component
+				    	# check if (ℓ′,ℓ) has already been computed
+				    	# We can use the fact that Yℓ′ℓs0(n2,n1) = (-1)^(ℓ+ℓ′+s)Yℓℓ′s0(n1,n2)
+				    	# If we have computed Yℓℓ′s0(n1,n2) already in the previous step,
+				    	# then we can simply read it in from the dictionary
+
+				    	if haskey(Y12,(ℓ′,ℓ))
+				    		Yℓ′ℓ_s0_n1n2 = Y12[(ℓ′,ℓ)]
+				    	elseif haskey(Y21,(ℓ,ℓ′))
+				    		Yℓ′ℓ_s0_n1n2 = Y21[(ℓ,ℓ′)] .* ((-1)^(ℓ+ℓ′+s) for s in axes(Y21[(ℓ,ℓ′)],1))
+				    	else
+				    		# compute and store it
+				    		Yℓ′ℓ_s0_n1n2 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,x1,x2,Y_ℓ₂=Yℓ_n2,
+				    						Y_ℓ₁=Yℓ′_n1_arr[ℓ′-ℓ])
+				    		Y12[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n1n2
+				    	end
+				    	
+				    	if haskey(Y21,(ℓ′,ℓ))
+				    		Yℓ′ℓ_s0_n2n1 = Y21[(ℓ′,ℓ)]
+				    	elseif haskey(Y12,(ℓ,ℓ′))
+				    		Yℓ′ℓ_s0_n2n1 = Y12[(ℓ,ℓ′)].* ((-1)^(ℓ+ℓ′+s) for s in axes(Y12[(ℓ,ℓ′)],1))
+				    	else
+				    		Yℓ′ℓ_s0_n2n1 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,x2,x1,Y_ℓ₂=Yℓ_n1,
+				    						Y_ℓ₁=Yℓ′_n2_arr[ℓ′-ℓ])
+				    		Y21[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n2n1
+				    	end
 
 			    		# Compute the CG coefficients that appear in fℓ′ℓsω
 			    		for t=-1:0,s in 1:s_max,η=-1:1
@@ -619,9 +592,9 @@ module kernel
 			    		# precompute the radial term in f, α=0
 			    		if 0 in K_components
 				    		for η=0:1
-				    			@. f_radial_r₁[0][:,η] = (-1)^η * G_x1[:,η] * drGsrc[:,η]
+				    			@. f_radial_0_r₁[:,η] = (-1)^η * G_x1[:,η] * drGsrc[:,η]
 				    			if !obs_at_same_height
-				    				@. f_radial_r₂[0][:,η] = (-1)^η * G_x2[:,η] * drGsrc[:,η]
+				    				@. f_radial_0_r₂[:,η] = (-1)^η * G_x2[:,η] * drGsrc[:,η]
 				    			end
 				    		end
 			    		end
@@ -629,10 +602,10 @@ module kernel
 			    		# α=1
 			    		if (-1 in K_components) || (1 in K_components)
 				    		for η=-1:1
-				    			@. f_radial_r₁[1][:,η] = (-1)^η * 1/r * G_x1[:,abs(η)] * 
+				    			@. f_radial_1_r₁[:,η] = (-1)^η * 1/r * G_x1[:,abs(η)] * 
 				    				( Ω(ℓ,η)*Gsrc[:,abs(η)] - ((η != -1) ? Gsrc[:,abs(η-1)] : 0) )
 				    			if !obs_at_same_height
-				    				@. f_radial_r₂[1][:,η] = (-1)^η * 1/r * G_x2[:,abs(η)] * 
+				    				@. f_radial_1_r₂[:,η] = (-1)^η * 1/r * G_x2[:,abs(η)] * 
 				    				( Ω(ℓ,η)*Gsrc[:,abs(η)] - ((η != -1) ? Gsrc[:,abs(η-1)] : 0) )
 				    			end
 				    		end
@@ -642,18 +615,18 @@ module kernel
 			    			# radial component (for all s)
 			    			
 			    			if 0 in K_components
-			    				fℓ′ℓsω_r₁[:,0] .= sum(f_radial_r₁[0][:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1)
+			    				fℓ′ℓsω_r₁[:,0] .= sum(f_radial_0_r₁[:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1)
 			    				if !obs_at_same_height
-			    					fℓ′ℓsω_r₂[:,0] .= sum(f_radial_r₂[0][:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1)
+			    					fℓ′ℓsω_r₂[:,0] .= sum(f_radial_0_r₂[:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1)
 			    				else
 			    					fℓ′ℓsω_r₂[:,0] .= fℓ′ℓsω_r₁[:,0]
 			    				end
 			    			end
 
 			    			if (-1 in K_components) || (1 in K_components)
-			    				fℓ′ℓsω_r₁[:,1] .= sum(f_radial_r₁[1][:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
+			    				fℓ′ℓsω_r₁[:,1] .= sum(f_radial_1_r₁[:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
 			    				if !obs_at_same_height
-			    					fℓ′ℓsω_r₂[:,1] .= sum(f_radial_r₂[1][:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
+			    					fℓ′ℓsω_r₂[:,1] .= sum(f_radial_1_r₂[:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
 			    				else
 			    					fℓ′ℓsω_r₂[:,1] .= fℓ′ℓsω_r₁[:,1]
 			    				end
@@ -739,8 +712,6 @@ module kernel
 			ℓ′_max_last_mode = min(maximum(ℓ_arr),last_mode[1]+s_max)
 			modes_minmax = minmax_from_split_array(ℓ_ωind_iter_on_proc)
 			ℓ_max_proc = modes_minmax.ℓ_max
-			ℓ_min_proc = modes_minmax.ℓ_min
-			ℓ′_min_proc =  abs(ℓ_max_proc - s_max)
 			ℓ′_max_proc =  ℓ_max_proc + s_max
 			
 			proc_id_min_Gobs = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
@@ -757,8 +728,8 @@ module kernel
 			Gobs = zeros(ComplexF64,nr,0:1)
 
 			# temporary array to precompute the radial part, indices are (r,η)
-			# the η=-1 and η=1 terms are identical for α=0
-			f_radial_robs = OffsetArray([zeros(ComplexF64,nr,0:1),zeros(ComplexF64,nr,-1:1)],0:1)
+			f_radial_0_robs = zeros(ComplexF64,nr,0:1) # the η=-1 and η=1 terms are identical
+			f_radial_1_robs = zeros(ComplexF64,nr,-1:1)
 			fℓ′ℓsω_robs = zeros(ComplexF64,nr,0:1)
 
 			# Clebsch Gordan coefficients, indices are (s,η,t)
@@ -783,8 +754,6 @@ module kernel
 			# Cache bipolar spherical harmonics in a dict on each worker
 			Y12 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
 			Y21 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
-
-			v_dict = Dict{Int64,OffsetArray{ComplexF64,2,Array{ComplexF64,2}}}()
 
 			# keep track of ℓ to cache Yℓ′ by rolling arrays
 			# if ℓ changes by 1 arrays can be rolled
@@ -825,22 +794,42 @@ module kernel
 		 	   		ℓ′_range = intersect(ℓ_arr,abs(ℓ-s_max):ℓ+s_max)
 	
 		 	   		# Precompute Ylmatrix to speed up evaluation of BiPoSH_s0
-		 	   		λ,v = read_or_compute_Jy_eigen(v_dict,ℓ)
-		 	   		Yℓ_n2 = Ylmatrix(ℓ,n2,n_range=0:0,λ=λ,v=v)
-		 	   		Yℓ_n1 = Ylmatrix(ℓ,n1,n_range=0:0,λ=λ,v=v)
+		 	   		Yℓ_n2 = Ylmatrix(ℓ,n2,n_range=0:0)
+		 	   		Yℓ_n1 = Ylmatrix(ℓ,n1,n_range=0:0)    
 
 		 	   		update_Yℓ′_arrays!(Yℓ′_n1_arr,Yℓ′_n2_arr,n1,n2,
-							ℓ,ℓ_prev,first_mode[1],ℓ′_range,n_range=0:0,v_dict=v_dict)
-	
+							ℓ,ℓ_prev,first_mode[1],ℓ′_range,n_range=0:0)
+
 			    	ℓ_prev=ℓ
 
 				    for ℓ′ in ℓ′_range
 
-				    	Yℓ′ℓ_s0_n1n2,Yℓ′ℓ_s0_n2n1 = compute_BiPoSH_without_los(
-				    								Y12,Y21,n1,n2,ℓ,ℓ′,s_max;
-				    								Yℓ_n1=Yℓ_n1,Yℓ_n2=Yℓ_n2,
-				    								Yℓ′_n1=Yℓ′_n1_arr[ℓ′-ℓ],
-				    								Yℓ′_n2=Yℓ′_n2_arr[ℓ′-ℓ])
+				    	# ignore line-of-sight projection, just the β=γ=0 component
+				    	# check if (ℓ′,ℓ) has already been computed
+				    	# We can use the fact that Yℓ′ℓs0(n2,n1) = (-1)^(ℓ+ℓ′+s)Yℓℓ′s0(n1,n2)
+				    	# If we have computed Yℓℓ′s0(n1,n2) already in the previous step,
+				    	# then we can simply read it in from the dictionary
+
+				    	if haskey(Y12,(ℓ′,ℓ))
+				    		Yℓ′ℓ_s0_n1n2 = Y12[(ℓ′,ℓ)]
+				    	elseif haskey(Y21,(ℓ,ℓ′))
+				    		Yℓ′ℓ_s0_n1n2 = Y21[(ℓ,ℓ′)] .* ((-1)^(ℓ+ℓ′+s) for s in axes(Y21[(ℓ,ℓ′)],1))
+				    	else
+				    		# compute and store it
+				    		Yℓ′ℓ_s0_n1n2 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,n1,n2,Y_ℓ₂=Yℓ_n2,
+				    						Y_ℓ₁=Yℓ′_n1_arr[ℓ′-ℓ])
+				    		Y12[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n1n2
+				    	end
+				    	
+				    	if haskey(Y21,(ℓ′,ℓ))
+				    		Yℓ′ℓ_s0_n2n1 = Y21[(ℓ′,ℓ)]
+				    	elseif haskey(Y12,(ℓ,ℓ′))
+				    		Yℓ′ℓ_s0_n2n1 = Y12[(ℓ,ℓ′)].* ((-1)^(ℓ+ℓ′+s) for s in axes(Y12[(ℓ,ℓ′)],1))
+				    	else
+				    		Yℓ′ℓ_s0_n2n1 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,n2,n1,Y_ℓ₂=Yℓ_n1,
+				    						Y_ℓ₁=Yℓ′_n2_arr[ℓ′-ℓ])
+				    		Y21[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n2n1
+				    	end
 
 			    		# Compute the CG coefficients that appear in fℓ′ℓsω
 			    		for t=-1:0,s in 1:s_max,η=-1:1
@@ -852,7 +841,7 @@ module kernel
 			    		end
 
 			    		proc_id_mode_Gobs,ℓ′ω_index_Gobs_file = procid_and_mode_index(ℓ_arr,1:Nν_Gfn,(ℓ′,ω_ind),num_procs_obs)
-			    		
+			    								
 		  		  		# Green functions based at the observation point for ℓ′
 		  		  		G = read(Gfn_fits_files_obs[proc_id_mode_Gobs][1],:,:,1:2,1,1,ℓ′ω_index_Gobs_file)
 			    		@. Gobs[:,0] = G[:,1,1] + im*G[:,2,1]
@@ -863,14 +852,14 @@ module kernel
 			    		# precompute the radial term in f, α=0
 			    		if 0 in K_components
 				    		for η=0:1
-				    			@. f_radial_robs[0][:,η] = (-1)^η * Gobs[:,η] * drGsrc[:,η]
+				    			@. f_radial_0_robs[:,η] = (-1)^η * Gobs[:,η] * drGsrc[:,η]
 				    		end
 			    		end
 
 			    		# α=1
 			    		if (-1 in K_components) || (1 in K_components)
 				    		for η=-1:1
-				    			@. f_radial_robs[1][:,η] = (-1)^η * 1/r * Gobs[:,abs(η)] * 
+				    			@. f_radial_1_robs[:,η] = (-1)^η * 1/r * Gobs[:,abs(η)] * 
 				    				( Ω(ℓ,η)*Gsrc[:,abs(η)] - ((η != -1) ? Gsrc[:,abs(η-1)] : 0) )
 				    		end
 				    	end
@@ -879,11 +868,11 @@ module kernel
 			    			# radial component (for all s)
 			    			
 			    			if 0 in K_components
-			    				fℓ′ℓsω_robs[:,0] .= sum(f_radial_robs[0][:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1) 
+			    				fℓ′ℓsω_robs[:,0] .= sum(f_radial_0_robs[:,abs(η)]*Cℓ′ℓ[η,s,0] for η=-1:1) 
 			    			end
 
 			    			if (-1 in K_components) || (1 in K_components)
-			    				fℓ′ℓsω_robs[:,1] .= sum(f_radial_robs[1][:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
+			    				fℓ′ℓsω_robs[:,1] .= sum(f_radial_1_robs[:,η]*Cℓ′ℓ[η,s,-1] for η=-1:1)
 			    			end
 
 			    			if isodd(ℓ+ℓ′+s) && -1 in K_components
@@ -947,6 +936,7 @@ module traveltimes
 	using Main.kernel
 
 	uniform_rotation_uplus(Ω_rot=20e2/Rsun) = @. √(4π/3)*im*Ω_rot*r
+
 
 	function δτ_uniform_rotation_firstborn_int_K_u(x1,x2;Ω_rot=20e2/Rsun,kwargs...)
 		K₊ = kernel_uniform_rotation_uplus(x1,x2;kwargs...)
