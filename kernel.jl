@@ -391,6 +391,50 @@ module kernel
     	end
 	end
 
+	function compute_BiPoSH_without_los(Y12,Y21,x1,x2,ℓ,ℓ′,s_max;
+		Yℓ_n1=nothing,Yℓ_n2=nothing,Yℓ′_n1=nothing,Yℓ′_n2=nothing)
+
+		# ignore line-of-sight projection, just the β=γ=0 component
+    	# check if (ℓ′,ℓ) has already been computed
+    	# We can use the fact that Yℓ′ℓs0(n2,n1) = (-1)^(ℓ+ℓ′+s)Yℓℓ′s0(n1,n2)
+    	# If we have computed Yℓℓ′s0(n1,n2) already in the previous step,
+		# then we can simply read it in from the dictionary
+
+		if haskey(Y12,(ℓ′,ℓ))
+    		Yℓ′ℓ_s0_n1n2 = Y12[(ℓ′,ℓ)]
+    	elseif haskey(Y21,(ℓ,ℓ′))
+    		Yℓ′ℓ_s0_n1n2 = Y21[(ℓ,ℓ′)] .* ((-1)^(ℓ+ℓ′+s) for s in axes(Y21[(ℓ,ℓ′)],1))
+    	else
+    		# compute and store it
+    		Yℓ′ℓ_s0_n1n2 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,x1,x2,
+    						Y_ℓ₁=Yℓ′_n1,Y_ℓ₂=Yℓ_n2)
+    		Y12[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n1n2
+    	end
+    	
+    	if haskey(Y21,(ℓ′,ℓ))
+    		Yℓ′ℓ_s0_n2n1 = Y21[(ℓ′,ℓ)]
+    	elseif haskey(Y12,(ℓ,ℓ′))
+    		Yℓ′ℓ_s0_n2n1 = Y12[(ℓ,ℓ′)].* ((-1)^(ℓ+ℓ′+s) for s in axes(Y12[(ℓ,ℓ′)],1))
+    	else
+    		Yℓ′ℓ_s0_n2n1 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,x2,x1,
+    						Y_ℓ₁=Yℓ′_n2,Y_ℓ₂=Yℓ_n1)
+    		Y21[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n2n1
+    	end
+
+    	return Yℓ′ℓ_s0_n1n2,Yℓ′ℓ_s0_n2n1
+	end
+
+	function read_or_compute_Jy_eigen(v_dict,ℓ)
+		if !isnothing(v_dict) && haskey(v_dict,ℓ)
+   			v = v_dict[ℓ]
+   			λ = Float64.(-ℓ:ℓ)
+   		else
+   			λ,v = Jy_eigen(ℓ)
+   			v_dict[ℓ] = v
+   		end
+   		return λ,v
+	end
+
 	function flow_axisymmetric_without_los(x1::Point3D,x2::Point3D,s_max;
 		K_components=-1:1,kwargs...)
 
@@ -437,7 +481,7 @@ module kernel
 									(ℓ′_min_first_mode,first_mode[2]),num_procs_x1)
 			proc_id_max_G_x1 = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
 									(ℓ′_max_last_mode,last_mode[2]),num_procs_x1)
-			
+
 			proc_id_min_G_x2 = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
                                   	(ℓ′_min_first_mode,first_mode[2]),num_procs_x2)
            	proc_id_max_G_x2 = get_processor_id_from_split_array(ℓ_arr,1:Nν_Gfn,
@@ -484,6 +528,8 @@ module kernel
 			# Cache bipolar spherical harmonics in a dict on each worker
 			Y12 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
 			Y21 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
+
+			v_dict = Dict{Int64,OffsetArray{ComplexF64,2,Array{ComplexF64,2}}}()
 
 			# keep track of ℓ to cache Yℓ′ by rolling arrays
 			# if ℓ changes by 1 arrays can be rolled
@@ -536,32 +582,11 @@ module kernel
 
 				    for ℓ′ in ℓ′_range
 
-				    	# ignore line-of-sight projection, just the β=γ=0 component
-				    	# check if (ℓ′,ℓ) has already been computed
-				    	# We can use the fact that Yℓ′ℓs0(n2,n1) = (-1)^(ℓ+ℓ′+s)Yℓℓ′s0(n1,n2)
-				    	# If we have computed Yℓℓ′s0(n1,n2) already in the previous step,
-				    	# then we can simply read it in from the dictionary
-
-				    	if haskey(Y12,(ℓ′,ℓ))
-				    		Yℓ′ℓ_s0_n1n2 = Y12[(ℓ′,ℓ)]
-				    	elseif haskey(Y21,(ℓ,ℓ′))
-				    		Yℓ′ℓ_s0_n1n2 = Y21[(ℓ,ℓ′)] .* ((-1)^(ℓ+ℓ′+s) for s in axes(Y21[(ℓ,ℓ′)],1))
-				    	else
-				    		# compute and store it
-				    		Yℓ′ℓ_s0_n1n2 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,x1,x2,Y_ℓ₂=Yℓ_n2,
-				    						Y_ℓ₁=Yℓ′_n1_arr[ℓ′-ℓ])
-				    		Y12[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n1n2
-				    	end
-				    	
-				    	if haskey(Y21,(ℓ′,ℓ))
-				    		Yℓ′ℓ_s0_n2n1 = Y21[(ℓ′,ℓ)]
-				    	elseif haskey(Y12,(ℓ,ℓ′))
-				    		Yℓ′ℓ_s0_n2n1 = Y12[(ℓ,ℓ′)].* ((-1)^(ℓ+ℓ′+s) for s in axes(Y12[(ℓ,ℓ′)],1))
-				    	else
-				    		Yℓ′ℓ_s0_n2n1 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,x2,x1,Y_ℓ₂=Yℓ_n1,
-				    						Y_ℓ₁=Yℓ′_n2_arr[ℓ′-ℓ])
-				    		Y21[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n2n1
-				    	end
+				    	Yℓ′ℓ_s0_n1n2,Yℓ′ℓ_s0_n2n1 = compute_BiPoSH_without_los(
+				    								Y12,Y21,x1,x2,ℓ,ℓ′,s_max;
+				    								Yℓ_n1=Yℓ_n1,Yℓ_n2=Yℓ_n2,
+				    								Yℓ′_n1=Yℓ′_n1_arr[ℓ′-ℓ],
+				    								Yℓ′_n2=Yℓ′_n2_arr[ℓ′-ℓ])
 
 			    		# Compute the CG coefficients that appear in fℓ′ℓsω
 			    		for t=-1:0,s in 1:s_max,η=-1:1
@@ -755,6 +780,8 @@ module kernel
 			Y12 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
 			Y21 = Dict{NTuple{2,Int64},OffsetArray{ComplexF64,3,Array{ComplexF64,3}}}()
 
+			v_dict = Dict{Int64,OffsetArray{ComplexF64,2,Array{ComplexF64,2}}}()
+
 			# keep track of ℓ to cache Yℓ′ by rolling arrays
 			# if ℓ changes by 1 arrays can be rolled
 			# if the ℓ wraps back then δℓ will be negative. 
@@ -804,32 +831,11 @@ module kernel
 
 				    for ℓ′ in ℓ′_range
 
-				    	# ignore line-of-sight projection, just the β=γ=0 component
-				    	# check if (ℓ′,ℓ) has already been computed
-				    	# We can use the fact that Yℓ′ℓs0(n2,n1) = (-1)^(ℓ+ℓ′+s)Yℓℓ′s0(n1,n2)
-				    	# If we have computed Yℓℓ′s0(n1,n2) already in the previous step,
-				    	# then we can simply read it in from the dictionary
-
-				    	if haskey(Y12,(ℓ′,ℓ))
-				    		Yℓ′ℓ_s0_n1n2 = Y12[(ℓ′,ℓ)]
-				    	elseif haskey(Y21,(ℓ,ℓ′))
-				    		Yℓ′ℓ_s0_n1n2 = Y21[(ℓ,ℓ′)] .* ((-1)^(ℓ+ℓ′+s) for s in axes(Y21[(ℓ,ℓ′)],1))
-				    	else
-				    		# compute and store it
-				    		Yℓ′ℓ_s0_n1n2 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,n1,n2,Y_ℓ₂=Yℓ_n2,
-				    						Y_ℓ₁=Yℓ′_n1_arr[ℓ′-ℓ])
-				    		Y12[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n1n2
-				    	end
-				    	
-				    	if haskey(Y21,(ℓ′,ℓ))
-				    		Yℓ′ℓ_s0_n2n1 = Y21[(ℓ′,ℓ)]
-				    	elseif haskey(Y12,(ℓ,ℓ′))
-				    		Yℓ′ℓ_s0_n2n1 = Y12[(ℓ,ℓ′)].* ((-1)^(ℓ+ℓ′+s) for s in axes(Y12[(ℓ,ℓ′)],1))
-				    	else
-				    		Yℓ′ℓ_s0_n2n1 = BiPoSH_s0(ℓ′,ℓ,1:s_max,0,0,n2,n1,Y_ℓ₂=Yℓ_n1,
-				    						Y_ℓ₁=Yℓ′_n2_arr[ℓ′-ℓ])
-				    		Y21[(ℓ′,ℓ)] = Yℓ′ℓ_s0_n2n1
-				    	end
+				    	Yℓ′ℓ_s0_n1n2,Yℓ′ℓ_s0_n2n1 = compute_BiPoSH_without_los(
+				    								Y12,Y21,n1,n2,ℓ,ℓ′,s_max;
+				    								Yℓ_n1=Yℓ_n1,Yℓ_n2=Yℓ_n2,
+				    								Yℓ′_n1=Yℓ′_n1_arr[ℓ′-ℓ],
+				    								Yℓ′_n2=Yℓ′_n2_arr[ℓ′-ℓ])
 
 			    		# Compute the CG coefficients that appear in fℓ′ℓsω
 			    		for t=-1:0,s in 1:s_max,η=-1:1
