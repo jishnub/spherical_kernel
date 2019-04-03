@@ -33,6 +33,7 @@ module kernel
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+		modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
 		h_ω = get(kwargs,:hω,hω(x1,x2;r_src=r_src,kwargs...)) :: Vector{ComplexF64}
 		h_ω = h_ω[ν_start_zeros .+ ν_ind_range]
@@ -40,9 +41,8 @@ module kernel
 		r₁_ind = argmin(abs.(r .- x1.r))
 		r₂_ind = argmin(abs.(r .- x2.r))
 
-		function summodes(rank)
+		function summodes(ℓ_ωind_iter_on_proc)
 		
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 
 			∂ϕ₂Pl_cosχ = dPl(cosχ(x1,x2),ℓmax=ℓ_arr[end]).*∂ϕ₂cosχ(x1,x2)
@@ -121,10 +121,7 @@ module kernel
 			return K
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
-		pmapsum(Vector{Float64},summodes,procs_used)
+		pmapsum(Vector{Float64},summodes,modes_iter)
 	end
 
 	function kernel_uniform_rotation_uplus(n1::Point2D,n2::Point2D;kwargs...)
@@ -141,6 +138,7 @@ module kernel
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+		modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
 
@@ -152,11 +150,8 @@ module kernel
 		end
 		h_ω = h_ω[ν_start_zeros .+ ν_ind_range]
 
-		# h_ω = hω(n1,n2,bounce_no=bounce_no,ℓ_range=ℓ_range,r_src=r_src,r_obs=r_obs) # only in range
+		function summodes(ℓ_ωind_iter_on_proc)
 
-		function summodes(rank)
-		
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			proc_id_range_Gobs = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs_obs)
 
@@ -217,10 +212,7 @@ module kernel
 			return K
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
-		pmapsum(Vector{Float64},summodes,procs_used)
+		pmapsum(Vector{Float64},summodes,modes_iter)
 	end
 	
 	function kernel_uniform_rotation_uplus(n1::Point2D,n2_arr::Vector{<:Point2D};
@@ -238,6 +230,7 @@ module kernel
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+		modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
 
@@ -261,9 +254,8 @@ module kernel
 			hω_arr = copy(transpose(hω_arr))[:,ν_start_zeros .+ ν_ind_range]
 		end
 
-		function summodes(rank)
+		function summodes(ℓ_ωind_iter_on_proc)
 		
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			proc_id_range_Gobs = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs_obs)
 
@@ -331,10 +323,7 @@ module kernel
 			return K
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
-		pmapsum(Array{Float64,2},summodes,procs_used)
+		pmapsum(Array{Float64,2},summodes,modes_iter)
 	end
 
 	################################################################################################################
@@ -343,9 +332,11 @@ module kernel
 	
 	Nℓ′ℓs(ℓ′,ℓ,s) = √((2ℓ+1)*(2ℓ′+1)/(4π*(2s+1)))
 
-	function compute_Yℓmatrix_twopoints(ℓ,x1::SphericalPoint,x2::SphericalPoint;n_range=-1:1)
+	function compute_Yℓmatrix_twopoints(ℓ,x1::SphericalPoint,x2::SphericalPoint;
+		n_range=-1:1,v_dict=nothing)
 
-		λ,v = Jy_eigen(ℓ)
+		λ,v = read_or_compute_Jy_eigen(v_dict,ℓ)
+		# λ,v = Jy_eigen(ℓ)
 		dℓ = djmatrix(ℓ,x1,n_range=n_range,λ=λ,v=v)
 		Y1 = Ylmatrix(dℓ,ℓ,x1,n_range=n_range,compute_d_matrix=false)
 		if x1.θ == x2.θ
@@ -358,7 +349,8 @@ module kernel
 		return Y1,Y2
 	end
 
-	function update_Yℓ′_arrays!(Yℓ′_n1_arr,Yℓ′_n2_arr,x1,x2,ℓ,ℓ_prev,ℓ_start,ℓ′_range;n_range=-1:1)
+	function update_Yℓ′_arrays!(Yℓ′_n1_arr,Yℓ′_n2_arr,x1,x2,
+		ℓ,ℓ_prev,ℓ_start,ℓ′_range;n_range=-1:1,v_dict=nothing)
 
 		ℓ′_last = last(ℓ′_range)
 		ℓ′_first = first(ℓ′_range)
@@ -378,13 +370,13 @@ module kernel
 
     		# compute the last element which is new
 
-    		Y1,Y2 = compute_Yℓmatrix_twopoints(ℓ′_last,x1,x2,n_range=n_range)
+    		Y1,Y2 = compute_Yℓmatrix_twopoints(ℓ′_last,x1,x2,n_range=n_range,v_dict=v_dict)
 			Yℓ′_n1_arr[ℓ′_last-ℓ][axes(Y1)...] = Y1
     		Yℓ′_n2_arr[ℓ′_last-ℓ][axes(Y2)...] = Y2
     	else
     		# re-initialize the Yℓ′ arrays
     		for ℓ′ in ℓ′_range
-    			Y1,Y2 = compute_Yℓmatrix_twopoints(ℓ′,x1,x2,n_range=n_range)
+    			Y1,Y2 = compute_Yℓmatrix_twopoints(ℓ′,x1,x2,n_range=n_range,v_dict=v_dict)
     			Yℓ′_n1_arr[ℓ′-ℓ][axes(Y1)...] = Y1
     			Yℓ′_n2_arr[ℓ′-ℓ][axes(Y2)...] = Y2
     		end
@@ -430,7 +422,9 @@ module kernel
    			λ = Float64.(-ℓ:ℓ)
    		else
    			λ,v = Jy_eigen(ℓ)
-   			v_dict[ℓ] = v
+   			if !isnothing(v_dict) 
+   				v_dict[ℓ] = v
+   			end
    		end
    		return λ,v
 	end
@@ -450,6 +444,7 @@ module kernel
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+		modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 		
 		h_ω_arr = hω(x1,x2;r_src=r_src,kwargs...)[ν_start_zeros .+ ν_ind_range] # only in range
 
@@ -458,9 +453,9 @@ module kernel
 
 		obs_at_same_height = r₁_ind == r₂_ind
 
-		function summodes(rank)
+		function summodes(ℓ_ωind_iter_on_proc)
 		
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank) |> collect
+			ℓ_ωind_iter_on_proc = collect(ℓ_ωind_iter_on_proc)
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 
@@ -572,8 +567,7 @@ module kernel
 		    		ℓ′_range = intersect(ℓ_arr,abs(ℓ-s_max):ℓ+s_max)
 
 		    		# Precompute Ylmatrix to speed up evaluation of BiPoSH_s0
-		    		Yℓ_n2 = Ylmatrix(ℓ,x2,n_range=0:0)
-		    		Yℓ_n1 = Ylmatrix(ℓ,x1,n_range=0:0)
+		    		Yℓ_n1,Yℓ_n2 = compute_Yℓmatrix_twopoints(ℓ,x1,x2,n_range=0:0,v_dict=v_dict)
 
 		    		update_Yℓ′_arrays!(Yℓ′_n1_arr,Yℓ′_n2_arr,x1,x2,
 							ℓ,ℓ_prev,first_mode[1],ℓ′_range,n_range=0:0)
@@ -694,11 +688,8 @@ module kernel
 			return K
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
 		T = OffsetArray{Float64,3,Array{Float64,3}} # type of arrays to be added to the channels
-		return pmapsum(T,summodes,procs_used)
+		return pmapsum(T,summodes,modes_iter)
 	end
 
 	function flow_axisymmetric_without_los(n1::Point2D,n2::Point2D,s_max;
@@ -715,14 +706,15 @@ module kernel
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+		modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 		
 		h_ω_arr = hω(n1,n2;r_src=r_src,r_obs=r_obs,kwargs...)[ν_start_zeros .+ ν_ind_range] # only in range
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
 
-		function summodes(rank)
+		function summodes(ℓ_ωind_iter_on_proc)
 
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank) |> collect
+			ℓ_ωind_iter_on_proc = collect(ℓ_ωind_iter_on_proc)
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 
@@ -821,8 +813,8 @@ module kernel
 		 	   		ℓ′_range = intersect(ℓ_arr,abs(ℓ-s_max):ℓ+s_max)
 	
 		 	   		# Precompute Ylmatrix to speed up evaluation of BiPoSH_s0
-		 	   		Yℓ_n2 = Ylmatrix(ℓ,n2,n_range=0:0)
-		 	   		Yℓ_n1 = Ylmatrix(ℓ,n1,n_range=0:0)    
+
+		 	   		Yℓ_n1,Yℓ_n2 = compute_Yℓmatrix_twopoints(ℓ,n1,n2,n_range=0:0,v_dict=v_dict)
 
 		 	   		update_Yℓ′_arrays!(Yℓ′_n1_arr,Yℓ′_n2_arr,n1,n2,
 							ℓ,ℓ_prev,first_mode[1],ℓ′_range,n_range=0:0)
@@ -917,12 +909,9 @@ module kernel
 
 			return K
 		end
-		
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
 
 		T = OffsetArray{Float64,3,Array{Float64,3}} # type of arrays to be added to the channels
-		return pmapsum(T,summodes,procs_used)
+		return pmapsum(T,summodes,modes_iter)
 	end
 
 	function meridional_flow_ψ_srange(x1,x2,s_max;kwargs...)

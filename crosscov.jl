@@ -12,7 +12,6 @@ module crosscov
 	@reexport using NumericallyIntegrateArray
 
 	@reexport using PyCall,FFTW
-	# @pyimport scipy.integrate as integrate
 
 	@reexport using Legendre,PointsOnASphere,TwoPointFunctions,VectorFieldsOnASphere
 
@@ -72,10 +71,9 @@ module crosscov
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+        modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
-		function summodes(rank)
-
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
+		function summodes(ℓ_ωind_iter_on_proc)
 
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
@@ -118,11 +116,8 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
 		T = OffsetVector{ComplexF64,Vector{ComplexF64}}
-		Cω_in_range = pmapsum(T,summodes,procs_used)
+		Cω_in_range = pmapsum(T,summodes,modes_iter)
 
 		Cω_arr[axes(Cω_in_range)...] .= Cω_in_range
 
@@ -139,10 +134,9 @@ module crosscov
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+        modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
-		function summodes(rank)
-
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
+        function summodes(ℓ_ωind_iter_on_proc)
 
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
@@ -196,11 +190,8 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
 		T = OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
-		Cω_in_range = pmapsum(T,summodes,procs_used)
+		Cω_in_range = pmapsum(T,summodes,modes_iter)
 
 		Cω_arr[axes(Cω_in_range)...] .= Cω_in_range
 
@@ -218,10 +209,9 @@ module crosscov
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+        modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
-		function summodes(rank)
-
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
+        function summodes(ℓ_ωind_iter_on_proc)
 
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
@@ -263,11 +253,8 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
 		T = OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
-		Cω_in_range = pmapsum(T,summodes,procs_used)
+		Cω_in_range = pmapsum(T,summodes,modes_iter)
 
 		Cω_arr[axes(Cω_in_range)...] .= Cω_in_range
 
@@ -289,10 +276,9 @@ module crosscov
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+        modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
-		function summodes(rank)
-
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
+        function summodes(ℓ_ωind_iter_on_proc)
 
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
@@ -340,11 +326,8 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
 		T = OffsetArray{ComplexF64,1,Vector{ComplexF64}}
-		Cω_in_range = pmapsum(T,summodes,procs_used)
+		Cω_in_range = pmapsum(T,summodes,modes_iter)
 
 		Cω_arr[axes(Cω_in_range)...] .= Cω_in_range
 
@@ -387,12 +370,12 @@ module crosscov
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+        modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
 
-		function summodes(rank)
-			
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
+		function summodes(ℓ_ωind_iter_on_proc)
+
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 
@@ -424,13 +407,10 @@ module crosscov
 			return Cℓω
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
 		Cℓω = zeros(ℓ_range,Nν)
 
 		T = OffsetArray{Float64,2,Array{Float64,2}}
-		Cℓω_in_range = pmapsum(T,summodes,procs_used)
+		Cℓω_in_range = pmapsum(T,summodes,modes_iter)
 
 		Cℓω[axes(Cℓω_in_range)...] .= Cℓω_in_range
 
@@ -459,10 +439,9 @@ module crosscov
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+        modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
-		function summodes(rank)
-
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
+        function summodes(ℓ_ωind_iter_on_proc)
 
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
@@ -503,13 +482,10 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
 		Cω_arr = zeros(ComplexF64,Nν)
 
 		T = OffsetArray{ComplexF64,1,Vector{ComplexF64}}
-		Cω_in_range = pmapsum(T,summodes,procs_used)
+		Cω_in_range = pmapsum(T,summodes,modes_iter)
 
 		Cω_arr[axes(Cω_in_range)...] .= Cω_in_range
 
@@ -524,12 +500,12 @@ module crosscov
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+        modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
 		∂ϕ₂Pl_cosχ = [dPl(cosχ(x1,x2),ℓmax=ℓ_range[end]) .* ∂ϕ₂cosχ(x1,x2) for x2 in x2_arr]
 
-		function summodes(rank)
+        function summodes(ℓ_ωind_iter_on_proc)
 
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 
@@ -573,13 +549,10 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
 		Cω_arr = zeros(ComplexF64,length(x2_arr),Nν)
 
 		T = OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
-		Cω_in_range = pmapsum(T,summodes,procs_used)
+		Cω_in_range = pmapsum(T,summodes,modes_iter)
 
 		Cω_arr[axes(Cω_in_range)...] .= Cω_in_range
 
@@ -595,6 +568,7 @@ module crosscov
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+        modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
 		∂ϕ₂Pl_cosχ = zeros(0:ℓ_range[end],length(n2_arr))
 		for (n2ind,n2) in enumerate(n2_arr)
@@ -602,9 +576,8 @@ module crosscov
 		end
 		∂ϕ₂Pl_cosχ = copy(transpose(∂ϕ₂Pl_cosχ))
 
-		function summodes(rank)
+        function summodes(ℓ_ωind_iter_on_proc)
 
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
 
@@ -640,13 +613,10 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
 		Cω_arr = zeros(ComplexF64,length(n2_arr),Nν)
 
 		T = OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
-		Cω_in_range = pmapsum(T,summodes,procs_used)
+		Cω_in_range = pmapsum(T,summodes,modes_iter)
 
 		Cω_arr[axes(Cω_in_range)...] .= Cω_in_range
 
@@ -661,10 +631,9 @@ module crosscov
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+        modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
-		function summodes(rank)
-
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
+        function summodes(ℓ_ωind_iter_on_proc)
 
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,
 											ℓ_ωind_iter_on_proc,num_procs)
@@ -710,13 +679,12 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
+
 
 		Cω_arr = zeros(ComplexF64,0:1,Nν)
 
 		T = OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
-		Cω_in_range = pmapsum(T,summodes,procs_used)
+		Cω_in_range = pmapsum(T,summodes,modes_iter)
 
 		Cω_arr[axes(Cω_in_range)...] .= Cω_in_range
 
@@ -734,10 +702,9 @@ module crosscov
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+        modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
-		function summodes(rank)
-
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
+        function summodes(ℓ_ωind_iter_on_proc)
 
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
@@ -775,13 +742,12 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
+
 
 		Cω_arr = zeros(ComplexF64,0:1,Nν)
 
 		T = OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
-		Cω_in_range = pmapsum(T,summodes,procs_used)
+		Cω_in_range = pmapsum(T,summodes,modes_iter)
 
 		Cω_arr[axes(Cω_in_range)...] .= Cω_in_range
 
@@ -799,6 +765,7 @@ module crosscov
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+        modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
 		∂ϕ₂Pl_cosχ = zeros(0:ℓ_range[end],length(n2_arr))
 		Pl_cosχ = zeros(0:ℓ_range[end],length(n2_arr))
@@ -811,9 +778,7 @@ module crosscov
 		Pl_cosχ = copy(transpose(Pl_cosχ))
 		∂ϕ₂Pl_cosχ = copy(transpose(∂ϕ₂Pl_cosχ))
 
-		function summodes(rank)
-
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
+        function summodes(ℓ_ωind_iter_on_proc)
 
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,
 										ℓ_ωind_iter_on_proc,num_procs)
@@ -853,14 +818,10 @@ module crosscov
 			return Cω_proc
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-		num_tasks = length(ℓ_range)*length(ν_ind_range)
-
 		Cω_arr = zeros(ComplexF64,0:1,length(n2_arr),Nν)
 
 		T = OffsetArray{ComplexF64,3,Array{ComplexF64,3}}
-		Cω_in_range = pmapsum(T,summodes,procs_used)
+		Cω_in_range = pmapsum(T,summodes,modes_iter)
 
 		Cω_arr[axes(Cω_in_range)...] .= Cω_in_range
 
@@ -923,6 +884,7 @@ module crosscov
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+        modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 		ℓmax = maximum(ℓ_range)
 
 		if isnothing(Δϕ_arr) 
@@ -939,8 +901,8 @@ module crosscov
 
 		Pl_cosχ = collect(transpose(Pl_cosχ))
 
-		function summodes(rank)
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
+		function summodes(ℓ_ωind_iter_on_proc)
+
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,
 											ℓ_ωind_iter_on_proc,num_procs)
 			Gfn_fits_files_src = Gfn_fits_files(Gfn_path_src,proc_id_range_Gsrc)
@@ -981,11 +943,8 @@ module crosscov
 			return Cϕω_arr
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
 		T = OffsetArray{ComplexF64,2,Array{ComplexF64,2}}
-		Cϕω_arr_in_range = pmapsum(T,summodes,procs_used)
+		Cϕω_arr_in_range = pmapsum(T,summodes,modes_iter)
 
 		Cϕω_arr = zeros(ComplexF64,nϕ,Nν)
 		Cϕω_arr[axes(Cϕω_arr_in_range)...] .= Cϕω_arr_in_range
@@ -1131,6 +1090,7 @@ module crosscov
 
 		ℓ_range = get(kwargs,:ℓ_range,ℓ_arr)
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
+        modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 
 		ℓmax = maximum(ℓ_arr)
 
@@ -1138,9 +1098,8 @@ module crosscov
 
 		δC = zeros(ComplexF64,Nν)
 
-		function summodes(rank)
-			ℓ_ωind_iter_on_proc = split_product_across_processors(ℓ_range,ν_ind_range,num_workers,rank)
-
+		function summodes(ℓ_ωind_iter_on_proc)
+			
 			proc_id_range_Gsrc = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs)
 			proc_id_range_Gobs1 = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs_obs1)
 			proc_id_range_Gobs2 = get_processor_range_from_split_array(ℓ_arr,1:Nν_Gfn,ℓ_ωind_iter_on_proc,num_procs_obs2)
@@ -1213,11 +1172,8 @@ module crosscov
 			return δCω
 		end
 
-		procs_used = workers_active(ℓ_range,ν_ind_range)
-		num_workers = length(procs_used)
-
 		T = OffsetVector{ComplexF64,Vector{ComplexF64}}
-		δC_in_range = pmapsum(T,summodes,procs_used)
+		δC_in_range = pmapsum(T,summodes,modes_iter)
 
 		δC[axes(δC_in_range)...] .= δC_in_range
 
@@ -1240,8 +1196,6 @@ module crosscov
 
 		ν_test_ind = argmin(abs.(ν_arr .- ν))
 		ν_on_grid = ν_arr[ν_test_ind]
-
-		# @printf "ν=%.1e ℓmin:%d ℓmax:%d\n" ν_on_grid ℓ_range[1] ℓ_range[end]
 
 		ν_ind_range = max(ν_test_ind-7,1):(ν_test_ind+min(7,ν_test_ind-1))
 		ν_match_index = ν_test_ind - ν_ind_range[1] + 1
@@ -1461,7 +1415,6 @@ module crosscov
 
 		h_t =  (@. f_t * ∂tCt) ./ sum((@. f_t*∂tCt^2 * dt),dims=1)
 	end
-	
 
 	function ht(x1,x2;kwargs...)
 
@@ -1472,7 +1425,6 @@ module crosscov
 		Cω_x1x2 = Cω(x1,x2;kwargs...)
 		
 		ht(Cω_x1x2,x1,x2;kwargs...)
-		
 	end
 
 	function hω(x1,x2;kwargs...)

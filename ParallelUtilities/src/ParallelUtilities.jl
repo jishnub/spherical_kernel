@@ -113,6 +113,9 @@ function procid_and_mode_index(ℓ_arr,ω_inds,(ℓ,ω_ind),num_procs)
 	return proc_id_mode,mode_index
 end
 
+workers_active(arr) = [p for (rank,p) in enumerate(workers()) 
+							if !isempty(split_across_processors(arr,nworkers(),rank))]
+
 workers_active(arr₁,arr₂) = [p for (rank,p) in enumerate(workers()) 
 							if !isempty(split_product_across_processors(arr₁,arr₂,nworkers(),rank))]
 
@@ -151,15 +154,40 @@ function node_remotechannels(::Type{T},procs_used) where {T}
 	return rank_on_node,hostnames,num_procs_node,node_channels
 end
 
-function pmapsum(::Type{T},f,procs_used,args...;kwargs...) where {T}
+# function pmapsum(::Type{T},f,procs_used::AbstractArray{<:Number},args...;kwargs...) where {T}
 
+# 	rank_on_node,hostnames,num_procs_node,node_channels = node_remotechannels(T,procs_used)
+
+# 	@sync for (rank,(p,hostname)) in enumerate(zip(procs_used,hostnames))
+# 		@async remotecall_wait(apply_sum,p,f,rank,args...;
+# 			rank_node=rank_on_node[rank],
+# 			np_node=num_procs_node[hostname],
+# 			channel_on_node=node_channels[hostname],kwargs...)
+# 	end
+
+# 	# worker at which final reduction takes place
+# 	p = procs_used[findfirst(x->x==0,rank_on_node)]
+
+# 	K = remotecall_fetch(x->sum(take!.(values(x))),p,node_channels)
+	
+# 	finalize.(values(node_channels))
+# 	return K
+# end
+
+function pmapsum(::Type{T},f,iterable,args...;kwargs...) where {T}
+
+	procs_used = workers_active(iterable)
+	num_workers = length(procs_used)
 	rank_on_node,hostnames,num_procs_node,node_channels = node_remotechannels(T,procs_used)
 
 	@sync for (rank,(p,hostname)) in enumerate(zip(procs_used,hostnames))
-		@async remotecall_wait(apply_sum,p,f,rank,args...;
+		@async begin
+			iterable_on_proc = split_across_processors(iterable,num_workers,rank)
+			remotecall_wait(apply_sum,p,f,iterable_on_proc,args...;
 			rank_node=rank_on_node[rank],
 			np_node=num_procs_node[hostname],
 			channel_on_node=node_channels[hostname],kwargs...)
+		end
 	end
 
 	# worker at which final reduction takes place
