@@ -154,26 +154,6 @@ function node_remotechannels(::Type{T},procs_used) where {T}
 	return rank_on_node,hostnames,num_procs_node,node_channels
 end
 
-# function pmapsum(::Type{T},f,procs_used::AbstractArray{<:Number},args...;kwargs...) where {T}
-
-# 	rank_on_node,hostnames,num_procs_node,node_channels = node_remotechannels(T,procs_used)
-
-# 	@sync for (rank,(p,hostname)) in enumerate(zip(procs_used,hostnames))
-# 		@async remotecall_wait(apply_sum,p,f,rank,args...;
-# 			rank_node=rank_on_node[rank],
-# 			np_node=num_procs_node[hostname],
-# 			channel_on_node=node_channels[hostname],kwargs...)
-# 	end
-
-# 	# worker at which final reduction takes place
-# 	p = procs_used[findfirst(x->x==0,rank_on_node)]
-
-# 	K = remotecall_fetch(x->sum(take!.(values(x))),p,node_channels)
-	
-# 	finalize.(values(node_channels))
-# 	return K
-# end
-
 function pmapsum(::Type{T},f,iterable,args...;kwargs...) where {T}
 
 	procs_used = workers_active(iterable)
@@ -201,6 +181,20 @@ end
 
 pmapsum(f,procs_used) = pmapsum(Any,f,procs_used)
 
+function pmap_onebatch_per_worker(f,iterable,args...;kwargs...)
+
+	procs_used = workers_active(iterable)
+	num_workers = length(procs_used)
+
+	@sync for (rank,p) in enumerate(procs_used)
+		@async begin
+			iterable_on_proc = split_across_processors(iterable,num_workers,rank)
+			@spawnat p f(iterable_on_proc,args...;kwargs...)
+		end
+	end
+	return nothing
+end
+
 function sum_at_node!(::Type{T},var::T,rank_node,np_node,
 	channel_on_node::RemoteChannel{Channel{T}}) where {T}
 
@@ -226,8 +220,8 @@ function apply_sum(f,args...;rank_node,np_node,channel_on_node,kwargs...)
 end
 
 export split_product_across_processors,get_processor_id_from_split_array
-export get_processor_range_from_split_array,workers_active
+export get_processor_range_from_split_array,workers_active,worker_rank
 export get_index_in_split_array,procid_and_mode_index,minmax_from_split_array
-export node_remotechannels,pmapsum,sum_at_node!
+export node_remotechannels,pmapsum,sum_at_node!,pmap_onebatch_per_worker
 
 end # module

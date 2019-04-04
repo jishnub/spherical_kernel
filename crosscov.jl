@@ -21,7 +21,7 @@ module crosscov
 	export δCω_uniform_rotation_rotatedwaves_linearapprox
 	export δCω_uniform_rotation_rotatedwaves,δCt_uniform_rotation_rotatedwaves,δCt_uniform_rotation_rotatedwaves_linearapprox
 	export time_window_indices_by_fitting_bounce_peak,time_window_bounce_filter
-	export @fft_ω_to_t,@fft_t_to_ω
+	export @fft_ω_to_t,@fft_t_to_ω,line_of_sight
 
 	const r_obs_default = Rsun - 75e5
 	export r_obs_default

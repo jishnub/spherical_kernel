@@ -394,36 +394,42 @@ module Greenfn_radial
 		return M_ωℓ
 	end
 
-	function compute_radial_component_of_Gfn_onemode(ω,ℓ;r_src=r_src_default,tangential=false)
+	function solve_for_components!(M,S,α,β)
+		
+		nr = div(length(S)+2,2) # inner and outer points are left out, so S has 2nr-2 points
+		H = M\S # solve the equation
+
+		@. α[2:nr] = H[1:nr-1]
+		@. β[1:nr-1] = H[nr:2nr-2]
+	end
+
+	function compute_Gfn_components_onemode(ω,ℓ;kwargs...)
 
 		# Solar model
+
+		αrℓω = zeros(ComplexF64,nr)
+		βrℓω = zeros(ComplexF64,nr)
+		αhℓω = zeros(ComplexF64,nr)
+		βhℓω = zeros(ComplexF64,nr)
+
+		compute_Gfn_components_onemode!(ω,ℓ,αrℓω,βrℓω,αhℓω,βhℓω;kwargs...)
+
+		return αrℓω,βrℓω,αhℓω,βhℓω
+	end
+
+	function compute_Gfn_components_onemode!(ω,ℓ,αrℓω,βrℓω,αhℓω,βhℓω;
+		r_src=r_src_default,tangential_source::Bool=true)
 
 		Sr,Sh = source(ω,ℓ,r_src=r_src)
 
 		M = ℒωℓr(ω,ℓ);
 
-		H = M\Sr;
+		# radial source
+		solve_for_components!(M,Sr,αrℓω,βrℓω)
 
-		αrℓω = H[1:nr-1]
-		prepend!(αrℓω,0)
-
-		βrℓω = H[nr:end]
-		append!(βrℓω,0)
-
-		if tangential
-
-			H = M\Sh;
-
-			αhℓω = H[1:nr-1]
-			prepend!(αhℓω,0)
-
-			βhℓω = H[nr:end]
-			append!(βhℓω,0)
-		else
-			αhℓω = βhℓω = zeros(nr)
+		if tangential_source
+			solve_for_components!(M,Sh,αhℓω,βhℓω)
 		end
-
-		return αrℓω,βrℓω,αhℓω,βhℓω
 	end
 
 	function Gfn_path_from_source_radius(r_src::Real)
@@ -493,17 +499,11 @@ module Greenfn_radial
 		frequency_grid(r_src;kwargs...);
 		@load joinpath(Gfn_save_directory,"parameters.jld2") Nν_Gfn dω Nν_Gfn ν_arr ν_start_zeros
 
-		println("$Nν_Gfn frequencies over $(@sprintf "%.1e" ν_arr[1]) to $(@sprintf "%.1e" ν_arr[end])")
-		println("ℓ from $(ℓ_arr[1]) to $(ℓ_arr[end])")
-
-		function compute_G_somemodes_serial_oneproc(rank)
-
-			# Each processor will save all ℓ's  for a range of frequencies if number of frequencies can be split evenly across processors.
-			ℓ_ω_proc = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,rank);
+		function compute_G_somemodes_serial_oneproc(ℓ_ω_proc)
 			
-			save_path = joinpath(Gfn_save_directory,@sprintf "Gfn_proc_%03d.fits" rank)
+			save_path = joinpath(Gfn_save_directory,
+								@sprintf "Gfn_proc_%03d.fits" worker_rank())
 
-			# file = jldopen(save_path,"w")
 			file = FITS(save_path,"w")
 
 			# save real and imaginary parts separately 
@@ -511,57 +511,70 @@ module Greenfn_radial
 
 			T2 = (N2./g .+ ddr*log.(r.^2 .*ρ) )
 
+			T = zeros(ComplexF64,nr)
+
+			αr = zeros(ComplexF64,nr)
+			βr = zeros(ComplexF64,nr)
+			αh = zeros(ComplexF64,nr)
+			βh = zeros(ComplexF64,nr)
+
 			for (ind,(ℓ,ω_ind)) in enumerate(ℓ_ω_proc)
 				
 				ω = dω*(ω_ind + ν_start_zeros)
-				αr,βr,αh,βh = compute_radial_component_of_Gfn_onemode(ω,ℓ);
+				αr,βr,αh,βh = compute_Gfn_components_onemode(ω,ℓ,
+								r_src=r_src,tangential_source=true);
 
+				# radial component for radial source
 				@. G[:,1,0,0,0,ind] = real(αr)
 				@. G[:,2,0,0,0,ind] = imag(αr)
-				@. G[:,1,1,0,0,ind] = real(Ω(ℓ,0) * βr/(ρ*r*ω^2))
-				@. G[:,2,1,0,0,ind] = imag(Ω(ℓ,0) * βr/(ρ*r*ω^2))
 
-				@. G[:,1,0,1,0,ind] = real(αh) / √2
-				@. G[:,2,0,1,0,ind] = imag(αh) / √2
+				# tangential component for radial source
+				@. T = Ω(ℓ,0) * βr/(ρ*r*ω^2)
+				@. G[:,1,1,0,0,ind] = real(T)
+				@. G[:,2,1,0,0,ind] = imag(T)
+
+				# radial component for tangential source
+				@. T = αh/√2
+				@. G[:,1,0,1,0,ind] = real(T)
+				@. G[:,2,0,1,0,ind] = imag(T)
 				
-				G[:,1,1,1,0,ind] .=  real(r./√(ℓ*(ℓ+1)) .* (βh./(ρ.*c.^2) .+ T2.*αh + Dr*αh) ./2)
-				G[:,2,1,1,0,ind] .=  imag(r./√(ℓ*(ℓ+1)) .* (βh./(ρ.*c.^2) .+ T2.*αh + Dr*αh) ./2)
+				# tangential component for tangential source
+				T .= r./√(ℓ*(ℓ+1)) .* (βh./(ρ.*c.^2) .+ T2.*αh .+ ddr*αh) ./2
+				@. G[:,1,1,1,0,ind] =  real(T)
+				@. G[:,2,1,1,0,ind] =  imag(T)
 
-				put!(tracker,0)
+				# derivatives
+				@inbounds for γ in axes(G,4),β in axes(G,3)
+					G[:,1,β,γ,1,ind] .= ddr*G[:,1,β,γ,0,ind]
+					G[:,2,β,γ,1,ind] .= ddr*G[:,2,β,γ,0,ind]
+				end
+
+				put!(tracker,true)
 			end
 
 			write(file,G.parent)
 			close(file)
-			return rank
 		end
 
-		w = workers_active(ℓ_arr,1:Nν_Gfn)
-		num_procs = length(w)
-		println("Number of workers: $num_procs")
+		modes_iter = Base.Iterators.product(ℓ_arr,1:Nν_Gfn)
+		num_tasks = length(modes_iter)
+		num_procs = length(workers_active(modes_iter))
 
 		append_parameters(num_procs=num_procs,ℓ_arr=ℓ_arr)
 
-		if isempty(w)
-			return
-		else
-			tracker = RemoteChannel(()->Channel{Int64}(100),1)
-			prog_bar = Progress(num_tasks, 1,"Green functions computed : ")
-			@sync begin
-				@async f = [@spawnat p compute_G_somemodes_serial_oneproc(rank) for (rank,p) in enumerate(w)]
-				@async begin 
-					
-					for n in 1:num_tasks
-						take!(tracker)
-						next!(prog_bar)
-					end
-				end
+		tracker = RemoteChannel(()->Channel{Bool}(10),1)
+		prog_bar = Progress(num_tasks,10,"Green functions computed : ")
+
+		@sync begin
+			@async pmap_onebatch_per_worker(compute_G_somemodes_serial_oneproc,modes_iter);
+			@async for i=1:num_tasks
+				take!(tracker) && next!(prog_bar)
 			end
-			close(tracker)
-		end
+		end;
 		return nothing
 	end
 
-	function components_radial_source(r_src=r_src_default;ℓ_arr=1:100,kwargs...)
+	function radial_source_components(r_src=r_src_default;ℓ_arr=1:100,kwargs...)
 
 		Gfn_save_directory = Gfn_path_from_source_radius(r_src)
 
@@ -574,74 +587,62 @@ module Greenfn_radial
 		frequency_grid(r_src;kwargs...);
 		@load joinpath(Gfn_save_directory,"parameters.jld2") Nν_Gfn dω Nν_Gfn ν_arr ν_start_zeros
 
-		println("$Nν_Gfn frequencies over $(@sprintf "%.1e" ν_arr[1]) to $(@sprintf "%.1e" ν_arr[end])")
-		println("ℓ from $(ℓ_arr[1]) to $(ℓ_arr[end])")
-
-		function compute_G_somemodes_serial_oneproc(rank)
-
-			# Each processor will save all ℓ's  for a range of frequencies if number of frequencies can be split evenly across processors.
-			ℓ_ω_proc = split_product_across_processors(ℓ_arr,1:Nν_Gfn,num_procs,rank);
+		function compute_G_somemodes_serial_oneproc(ℓ_ω_proc)
 			
-			# Gfn_arr = Vector{Gfn}(undef,length(ℓ_ω_proc));
-			save_path = joinpath(Gfn_save_directory,@sprintf "Gfn_proc_%03d.fits" rank)
+			save_path = joinpath(Gfn_save_directory,
+								@sprintf "Gfn_proc_%03d.fits" worker_rank())
 
-			# file = jldopen(save_path,"w")
 			file = FITS(save_path,"w")
 
 			# save real and imaginary parts separately 
 			# indices are r,re-im,α,β,dorder,ℓω
 			G = zeros(nr,2,0:1,0:0,0:1,length(ℓ_ω_proc))
+			T = zeros(ComplexF64,nr)
 
 			for (ind,(ℓ,ω_ind)) in enumerate(ℓ_ω_proc)
 				
 				ω = dω*(ω_ind + ν_start_zeros)
 				# need only the radial-source components if line-of-sight is ignored
-				αr,βr, = compute_radial_component_of_Gfn_onemode(ω,ℓ,tangential=false);
+				αr,βr, = compute_Gfn_components_onemode(ω,ℓ,
+							r_src=r_src,tangential_source=false);
 
 				# radial component for radial source
 				@. G[:,1,0,0,0,ind] = real(αr)
 				@. G[:,2,0,0,0,ind] = imag(αr)
-				G[:,1,0,0,1,ind] .= ddr*G[:,1,0,0,0,ind]
-				G[:,2,0,0,1,ind] .= ddr*G[:,2,0,0,0,ind]
+				
 				# tangential component for radial source
-				@. G[:,1,1,0,0,ind] = real(Ω(ℓ,0) * βr/(ρ*r*ω^2))
-				@. G[:,2,1,0,0,ind] = imag(Ω(ℓ,0) * βr/(ρ*r*ω^2))
-				G[:,1,1,0,1,ind] .= ddr*G[:,1,1,0,0,ind]
-				G[:,2,1,0,1,ind] .= ddr*G[:,2,1,0,0,ind]
+				@. T = Ω(ℓ,0) * βr/(ρ*r*ω^2)
+				@. G[:,1,1,0,0,ind] = real(T)
+				@. G[:,2,1,0,0,ind] = imag(T)
 
-				put!(tracker,0)
+				# derivatives
+				@inbounds for β in axes(G,3)
+					G[:,1,β,0,1,ind] .= ddr*G[:,1,β,0,0,ind]
+					G[:,2,β,0,1,ind] .= ddr*G[:,2,β,0,0,ind]
+				end
+
+				put!(tracker,true)
 			end
 
 			write(file,G.parent)
-
 			close(file)
-			return rank
 		end
 
-		w = workers_active(ℓ_arr,1:Nν_Gfn)
-		num_procs = length(w)
-		println("Number of workers: $num_procs")
-		num_tasks = length(ℓ_arr)*Nν_Gfn
+		modes_iter = Base.Iterators.product(ℓ_arr,1:Nν_Gfn)
+		num_tasks = length(modes_iter)
+		num_procs = length(workers_active(modes_iter))
 
 		append_parameters(num_procs=num_procs,ℓ_arr=ℓ_arr)
 
-		if isempty(w)
-			return
-		else
-			tracker = RemoteChannel(()->Channel{Int64}(100),1)
-			prog_bar = Progress(num_tasks, 1,"Green functions computed : ")
-			@sync begin
-				@async f = [@spawnat p compute_G_somemodes_serial_oneproc(rank) for (rank,p) in enumerate(w)]
-				@async begin 
-					
-					for n in 1:num_tasks
-						take!(tracker)
-						next!(prog_bar)
-					end
-				end
+		tracker = RemoteChannel(()->Channel{Bool}(10),1)
+		prog_bar = Progress(num_tasks,10,"Green functions computed : ")
+
+		@sync begin
+			@async pmap_onebatch_per_worker(compute_G_somemodes_serial_oneproc,modes_iter);
+			@async for i=1:num_tasks
+				take!(tracker) && next!(prog_bar)
 			end
-			close(tracker)
-		end
+		end;
 		return nothing
 	end
 
