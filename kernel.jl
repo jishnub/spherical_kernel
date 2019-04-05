@@ -429,6 +429,20 @@ module kernel
    		return λ,v
 	end
 
+	function assign_Gfn_components!(G_Re_Im::Array{Float64},G::OffsetArray{ComplexF64})
+	      ax_offset = CartesianIndices(axes(G)[2:end])
+	      ax_flat = CartesianIndices(axes(G_Re_Im)[3:end])
+	      assign_Gfn_components!(G_Re_Im,G,ax_flat,ax_offset)
+	end
+
+	function assign_Gfn_components!(G_Re_Im::Array{Float64},G::OffsetArray{ComplexF64},
+	      ax_flat,ax_offset)
+
+	      for (ind_offset,ind_flat) in zip(ax_offset,ax_flat)
+	              @. G[:,ind_offset] = G_Re_Im[:,1,ind_flat] + im*G_Re_Im[:,2,ind_flat]
+	      end
+	end
+
 	function flow_axisymmetric_without_los(x1::Point3D,x2::Point3D,s_max;
 		K_components=-1:1,kwargs...)
 
@@ -550,16 +564,13 @@ module kernel
 					ω = dω*(ν_start_zeros + ω_ind)
 		    		
 		    		G = read(Gsrc_file[1],:,:,1:2,1,1,ℓω_index_Gsrc_file)
-
-		    		@. Gsrc[:,0] = G[:,1,1] + im*G[:,2,1]
-		    		@. Gsrc[:,1] = G[:,1,2] + im*G[:,2,2]
+		    		assign_Gfn_components!(G,Gsrc)
 		    		G_r₁_rsrc = Gsrc[r₁_ind,0]
 		    		G_r₂_rsrc = Gsrc[r₂_ind,0]
 
 		    		if 0 in K_components
 		    			G = read(Gsrc_file[1],:,:,1:2,1,2,ℓω_index_Gsrc_file)
-			    		@. drGsrc[:,0] = G[:,1,1] + im*G[:,2,1]
-			    		@. drGsrc[:,1] = G[:,1,2] + im*G[:,2,2]
+		    			assign_Gfn_components!(G,drGsrc)
 		    		end
 
 		    		G = nothing
@@ -596,14 +607,11 @@ module kernel
 						
 	    				# Green functions based at the observation point for ℓ′
 	    				G = read(Gfn_fits_files_obs1[proc_id_mode_G_x1][1],:,:,1:2,1,1,ℓ′ω_index_G_x1_file)
-			    		@. G_x1[:,0] = G[:,1,1] + im*G[:,2,1]
-			    		@. G_x1[:,1] = G[:,1,2] + im*G[:,2,2]
+			    		assign_Gfn_components!(G,G_x1)
 
 			    		if !obs_at_same_height
 		    				G = read(Gfn_fits_files_obs2[proc_id_mode_G_x2][1],:,:,1:2,1,1,ℓ′ω_index_G_x2_file)
-
-		    				@. G_x2[:,0] = G[:,1,1] + im*G[:,2,1]
-				    		@. G_x2[:,1] = G[:,1,2] + im*G[:,2,2]
+		    				assign_Gfn_components!(G,G_x2)
 				    	end
 
 			    		G = nothing
@@ -708,7 +716,7 @@ module kernel
 		ν_ind_range = get(kwargs,:ν_ind_range,1:Nν_Gfn)
 		modes_iter = Base.Iterators.product(ℓ_range,ν_ind_range)
 		
-		h_ω_arr = hω(n1,n2;r_src=r_src,r_obs=r_obs,kwargs...)[ν_start_zeros .+ ν_ind_range] # only in range
+		h_ω_arr = hω(n1,n2;kwargs...)[ν_start_zeros .+ ν_ind_range] # only in range
 
 		r_obs_ind = argmin(abs.(r .- r_obs))
 
@@ -797,15 +805,12 @@ module kernel
 					ω = dω*(ν_start_zeros + ω_ind)
 
 		 	 		G = read(Gsrc_file[1],:,:,1:2,1,1,ℓω_index_Gsrc_file)
-	
-		 	 		@. Gsrc[:,0] = G[:,1,1] + im*G[:,2,1]
-		 	 		@. Gsrc[:,1] = G[:,1,2] + im*G[:,2,2]
+					assign_Gfn_components!(G,Gsrc)
 		 	 		G_robs_rsrc = Gsrc[r_obs_ind,0]
 	
 		 	 		if 0 in K_components
 		 	 			G = read(Gsrc_file[1],:,:,1:2,1,2,ℓω_index_Gsrc_file)
-			    		@. drGsrc[:,0] = G[:,1,1] + im*G[:,2,1]
-			    		@. drGsrc[:,1] = G[:,1,2] + im*G[:,2,2]
+		 	 			assign_Gfn_components!(G,drGsrc)
 		 	   		end
 	
 		 	   		G = nothing
@@ -842,8 +847,7 @@ module kernel
 			    								
 		  		  		# Green functions based at the observation point for ℓ′
 		  		  		G = read(Gfn_fits_files_obs[proc_id_mode_Gobs][1],:,:,1:2,1,1,ℓ′ω_index_Gobs_file)
-			    		@. Gobs[:,0] = G[:,1,1] + im*G[:,2,1]
-			    		@. Gobs[:,1] = G[:,1,2] + im*G[:,2,2]
+			    		assign_Gfn_components!(G,Gobs)
 
 			    		G = nothing
 
